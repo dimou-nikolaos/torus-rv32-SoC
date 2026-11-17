@@ -3,3 +3,4 @@ torus_tile_program(regtest SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/regtest/regtest.c
 torus_tile_program(dmatest SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/dmatest/dmatest.c)
 torus_tile_program(pingpong SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/pingpong/pingpong.c)
 torus_tile_program(nocops SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/nocops/nocops.c)
+torus_tile_program(memcpy SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/memcpy/memcpy.c)

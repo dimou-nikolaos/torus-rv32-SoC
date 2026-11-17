@@ -38,7 +38,8 @@ function(torus_tile_program name)
     COMMAND ${RISCV_GCC} ${TILE_CFLAGS} ${incs} ${defs} ${srcs} ${ldflags}
             -Wl,-Map=${CMAKE_BINARY_DIR}/sw/${name}.map -o ${out}
     COMMAND ${RISCV_OBJDUMP} -d -M no-aliases ${out} > ${CMAKE_BINARY_DIR}/sw/${name}.dis
-    DEPENDS ${srcs} ${CMAKE_SOURCE_DIR}/sw/sdk/link.ld ${CMAKE_SOURCE_DIR}/sw/sdk/tile.h ${K_LDSCRIPT}
+    DEPENDS ${srcs} ${CMAKE_SOURCE_DIR}/sw/sdk/link.ld ${CMAKE_SOURCE_DIR}/sw/sdk/tile.h
+            ${CMAKE_SOURCE_DIR}/sw/sdk/torus_exit.h ${K_LDSCRIPT}
     COMMENT "Tile program ${name}"
     VERBATIM)
   add_custom_target(${name} ALL DEPENDS ${out})

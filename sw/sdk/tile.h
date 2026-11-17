@@ -10,7 +10,10 @@ extern "C" {
 // ------------------------------------------------------------- memory map
 #define TILE_SPM_BASE      0x00000000u
 #define TILE_SYNC_BASE     0x0000F000u
-#define TILE_MAILBOX_BASE  0x0000FF00u
+#define TILE_MAILBOX_BASE  0x0000FF00u   // args from the host: 0xFF00..0xFFEF
+#define TILE_EXIT_WORD     0x0000FFFCu   // 0xE000_0000 | exit code, written at exit
+#define IO_SEM(k)          (0x10004000u + 4u * (unsigned)(k))   // host semaphores in the I/O tile
+#define IO_DONE            IO_SEM(0)
 #define TILE_NIU_BASE      0x10000000u
 #define TILE_TCTRL_BASE    0x10001000u
 #define TILE_PERF_BASE     0x10002000u
@@ -136,6 +139,8 @@ static inline uint64_t perf_read_snapshot(unsigned idx) {
 // ------------------------------------------------------- console and exit
 static inline void console_putc(char c) { mmio_write(TILE_CONSOLE_BASE + CONSOLE_TX, (uint8_t)c); }
 void console_puts(const char *s);
+// End the program: exit word, wait for both DMA channels, DONE += 1 in the
+// I/O tile, console exit (simulation). Returning from kernel_main does this.
 void tile_exit(int code) __attribute__((noreturn));
 
 // ------------------------------------------------------------------ NoC

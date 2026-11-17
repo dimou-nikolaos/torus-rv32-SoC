@@ -8,7 +8,8 @@
 //   0x100       INFO      RO {IO_RD_OUTSTANDING, GY, GX, version}
 //   0x104       CYCLES    RO fabric cycles, low 32 bits
 //   0x108..     counters  RO WRITE flits injected, READ_REQs injected, READ_RSP
-//                         flits received, flits dropped, atomics executed
+//                         flits received, flits dropped, atomics executed, all
+//                         flits received
 // Other offsets read as zero and ignore writes.
 //
 // Same-cycle updates of one semaphore compose: a NoC write replaces a host
@@ -41,9 +42,10 @@ module io_regs
   input  logic         ev_wr_flit_i,
   input  logic         ev_rd_req_i,
   input  logic         ev_rsp_flit_i,
-  input  logic         ev_rx_err_i
+  input  logic         ev_rx_err_i,
+  input  logic         ev_rx_flit_i
 );
-  localparam int unsigned NCNT = 5;   // WR_FLITS, RD_REQS, RSP_FLITS, RX_ERRORS, ATOMICS
+  localparam int unsigned NCNT = 6;   // WR_FLITS, RD_REQS, RSP_FLITS, RX_ERRORS, ATOMICS, RX_FLITS
 
   logic [31:0] sem_q  [IO_NSEM];
   logic [31:0] cnt_q  [NCNT];
@@ -83,6 +85,7 @@ module io_regs
       if (ev_rsp_flit_i) cnt_q[2] <= cnt_q[2] + 1'b1;
       if (ev_rx_err_i)   cnt_q[3] <= cnt_q[3] + 1'b1;
       if (rx_inc_i)      cnt_q[4] <= cnt_q[4] + 1'b1;
+      if (ev_rx_flit_i)  cnt_q[5] <= cnt_q[5] + 1'b1;
     end
 
   function automatic logic [31:0] word(logic [9:0] w);
@@ -97,6 +100,7 @@ module io_regs
       IO_RSP_FLITS: return cnt_q[2];
       IO_RX_ERRORS: return cnt_q[3];
       IO_ATOMICS:   return cnt_q[4];
+      IO_RX_FLITS:  return cnt_q[5];
       default:      return '0;
     endcase
   endfunction

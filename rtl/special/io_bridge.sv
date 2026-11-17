@@ -59,7 +59,8 @@ module io_bridge
   output logic         ev_wr_flit_o,
   output logic         ev_rd_req_o,
   output logic         ev_rsp_flit_o,
-  output logic         ev_rx_err_o
+  output logic         ev_rx_err_o,
+  output logic         ev_rx_flit_o
 );
   localparam int unsigned SW = $clog2(OUT);
   localparam int unsigned CW = $clog2(DEPTH + 1);
@@ -246,6 +247,7 @@ module io_bridge
   assign rx_inc_val_o  = rf.data[31:0];
   assign ev_rsp_flit_o = rx_rsp;
   assign ev_rx_err_o   = rx_pop && !rx_rsp && !rx_wr && !rx_atom;
+  assign ev_rx_flit_o  = rx_pop;
 
   // ------------------------------------------------------------------ state
   always_ff @(posedge clk_i or negedge rst_ni)

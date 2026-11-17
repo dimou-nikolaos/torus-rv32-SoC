@@ -84,6 +84,15 @@ def discover(args):
     tests.append(Test("soc2x2.dmatest", [soc22, str(BUILD / "sw/dmatest.elf")]))
     tests.append(Test("soc2x2.hello", [soc22, str(BUILD / "sw/hello.elf")]))
     tests.append(Test("soc2x2.nocops", [soc22, str(BUILD / "sw/nocops.elf")]))
+    soc44 = str(BUILD / "tb/soc/tb_soc_4x4")
+    tests.append(Test("soc4x4.nocops", [soc44, str(BUILD / "sw/nocops.elf")], timeout=1200))
+    # M2 exit test: memcpy launched from C++ through the I/O tile, checked
+    # bit-exact and against the performance model (exact per-link flit counts,
+    # copy time within tolerance)
+    for grid, shift in (("2x2", "1,1"), ("4x4", "1,1"), ("4x4", "2,2")):
+        tests.append(Test(f"soc{grid}.memcpy_s{shift.replace(',', '')}", [
+            sys.executable, "model/perf_model.py", "run-memcpy", "--host", str(BUILD / f"tb/soc/host_memcpy_{grid}"),
+            "--elf", str(BUILD / "sw/memcpy.elf"), "--shift", shift], timeout=1200))
     for elf in sorted((BUILD / "sw/isa").glob("*.elf")):
         tests.append(Test(f"isa.{elf.stem}", [tb, str(elf)]))
     if args.synth:
@@ -98,6 +107,8 @@ def discover(args):
                           seeded=False, timeout=1800))
     tests.append(Test("lint.io_tile", lint + ["--top-module", "io_tile", "-f", "rtl/special/io_syn.f"],
                       seeded=False))
+    tests.append(Test("lint.soc_3x2", lint + ["--top-module", "soc_top", "-GNX=3", "-GNY=2",
+                                             "-f", "rtl/soc/soc_sim.f"], seeded=False))
     return tests
 
 

@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
   int reply_lat = 10;
   int credit_jitter = 6;
   bool slow_credits = true;
-  uint64_t n_writes = 0, n_readreq = 0, n_rsp = 0, n_bad = 0, n_atomic = 0, inj_flits = 0;
+  uint64_t n_writes = 0, n_readreq = 0, n_rsp = 0, n_bad = 0, n_atomic = 0, inj_flits = 0, n_rx_all = 0;
   uint32_t sem_sum[16] = {};     // atomics to SEM 8..11, writes to SEM 12..15
   uint32_t sem_last[16] = {};
   for (int k = 12; k < 16; k++) sem_last[k] = 0;
@@ -144,6 +144,7 @@ int main(int argc, char** argv) {
         dut->ej_valid_i = 1;
         ej_credits--;
         n_rsp++;
+        n_rx_all++;
         return;
       }
     }
@@ -187,6 +188,7 @@ int main(int argc, char** argv) {
       for (int k = 0; k < Flit::kWords; k++) dut->ej_flit_i[k] = w[k];
       dut->ej_valid_i = 1;
       ej_credits--;
+      n_rx_all++;
     }
   };
 
@@ -527,7 +529,7 @@ int main(int argc, char** argv) {
   }
   struct { uint32_t off; uint64_t want; const char* name; } cnt[] = {
       {0x108, n_writes, "WR_FLITS"}, {0x10C, n_readreq, "RD_REQS"}, {0x110, n_rsp, "RSP_FLITS"},
-      {0x114, n_bad, "RX_ERRORS"}, {0x118, n_atomic, "ATOMICS"}};
+      {0x114, n_bad, "RX_ERRORS"}, {0x118, n_atomic, "ATOMICS"}, {0x11C, n_rx_all, "RX_FLITS"}};
   for (auto& c : cnt) {
     if (rd32(c.off, &v)) return 1;
     TB_CHECK(v == (uint32_t)c.want, "%s = %u, expected %llu", c.name, v, (unsigned long long)c.want);

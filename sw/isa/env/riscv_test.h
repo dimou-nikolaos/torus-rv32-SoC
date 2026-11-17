@@ -1,11 +1,10 @@
 // riscv-tests environment for a Torus tile (replaces env/p/riscv_test.h).
-// Pass: write 0 to the console exit register. Fail: write (TESTNUM << 1) | 1.
-// Any unexpected trap fails with 0x8000 | mcause.
+// Pass: exit code 0. Fail: (TESTNUM << 1) | 1. Any unexpected trap fails with
+// 0x8000 | mcause. Exits go through the SDK's exit sequence (exit word, DONE).
 #pragma once
 
 #include "encoding.h"
-
-#define TORUS_EXIT 0x10003004
+#include "torus_exit.h"
 
 #define RVTEST_RV32U .macro init; .endm
 #define RVTEST_RV64U RVTEST_RV32U
@@ -27,9 +26,7 @@ trap_vector:                    \
   csrr a0, mcause;              \
   li t0, 0x8000;                \
   or a0, a0, t0;                \
-  li t0, TORUS_EXIT;            \
-  sw a0, 0(t0);                 \
-1: j 1b;                        \
+  torus_exit_seq;               \
 test_start:                     \
   init;
 
@@ -38,18 +35,15 @@ test_start:                     \
 
 #define RVTEST_PASS             \
   fence;                        \
-  li t0, TORUS_EXIT;            \
-  sw zero, 0(t0);               \
-1: j 1b;
+  li a0, 0;                     \
+  torus_exit_seq;
 
 #define RVTEST_FAIL             \
   fence;                        \
 1: beqz TESTNUM, 1b;            \
   sll a0, TESTNUM, 1;           \
   or a0, a0, 1;                 \
-  li t0, TORUS_EXIT;            \
-  sw a0, 0(t0);                 \
-2: j 2b;
+  torus_exit_seq;
 
 #define EXTRA_DATA
 

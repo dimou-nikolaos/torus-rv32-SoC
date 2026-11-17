@@ -1,6 +1,8 @@
 # Tile start-up: gp, sp, trap vector, clear .bss, then
 #   exit(kernel_main((const args_t *)__mailbox))
-# A trap prints its cause and ends the simulation with exit code 0x80 | mcause.
+# A trap prints its cause and exits with code 0x80 | mcause. Every exit ends in
+# torus_exit (torus_exit.h): exit word, DONE increment in the I/O tile.
+#include "torus_exit.h"
 
   .section .text.init, "ax"
   .globl _start
@@ -26,6 +28,10 @@ _start:
   call  exit
 3:
   j     3b
+
+  .globl torus_exit
+torus_exit:
+  torus_exit_seq
 
   # CV32E40X keeps only mtvec[31:7]: the trap entry must be 128-byte aligned.
   .align 7

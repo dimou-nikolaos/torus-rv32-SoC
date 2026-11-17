@@ -20,6 +20,9 @@ TORUS_IMAGE=torus-tools:local tools/dev.sh scripts/regress.py --no-build --seed 
 
 - `scripts/regress.py` is the gate: every test is seeded and prints a replay
   command; add each new test there (and CMake target in tb/*/CMakeLists.txt).
+- SoC tests go through the I/O tile: tb/soc/sim_host.* is the simulated SoC as
+  a libtorus Transport; tb_soc and host programs (host_memcpy) are libtorus
+  programs. There is no backdoor any more.
 - Area: `scripts/synth_area.py` (also run by CI and `regress.py --synth`).
 - Verilator runs at CMake configure time: a lint warning (`-Wall`, fatal) fails
   configuration, and the old binary is left in place. Check the build output
@@ -60,4 +63,17 @@ TORUS_IMAGE=torus-tools:local tools/dev.sh scripts/regress.py --no-build --seed 
 - On rings of length 2 no cyclic wait can form, so deadlock demonstrations need
   at least 3x3.
 - Yosys (yosys-slang) flattens by default; per-unit area comes from separate
-  runs per unit (scripts/synth_area.py).
+  runs per unit (scripts/synth_area.py). Its blackbox pass rejects modules with
+  type parameters: use widths.
+- Verilator's *__Slow.cpp (construction) must stay at -O0 (cmake/Verilated.cmake):
+  at -O3 one 4x4 SoC file alone takes 13 minutes.
+- Counters count only while CTRL.run is set, but a router counts a flit when it
+  crosses the switch, a few cycles before the NIU retires it. Host traffic right
+  behind a stop write would be counted by the router only; libtorus stops and
+  launches last tile first and stop() waits until every stop write has landed,
+  which keeps per-link counts exact (the memcpy model check relies on it).
+- AXI writes are posted (B once in the crossing). A remote register write that
+  fails at the tile is dropped silently (NIU error counter), not reported.
+- Head-of-line blocking: one input buffer per router port, so a turning flow
+  stalls a continuing flow behind it; contended patterns run slower than an
+  even link split (memcpy shift 2,2 on 4x4).

@@ -24,6 +24,7 @@ package io_pkg;
   localparam logic [11:0] IO_RSP_FLITS = 12'h110;       // RO: READ_RSP flits received
   localparam logic [11:0] IO_RX_ERRORS = 12'h114;       // RO: flits dropped
   localparam logic [11:0] IO_ATOMICS   = 12'h118;       // RO: ATOMIC_INC flits executed
+  localparam logic [11:0] IO_RX_FLITS  = 12'h11C;       // RO: flits ejected (all kinds)
   localparam logic [7:0]  IO_VERSION   = 8'h01;
 
   // Front-end to bridge, through the request crossing: one write beat, or one

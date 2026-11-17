@@ -15,11 +15,11 @@ foreach(suite ui um)
       COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/sw/isa
       COMMAND ${RISCV_GCC} -march=rv32im_zicsr_zifencei -mabi=ilp32 -static -mcmodel=medany
               -fvisibility=hidden -nostdlib -nostartfiles
-              -I${CMAKE_CURRENT_SOURCE_DIR}/env -I${RT}/env -I${RT}/isa/macros/scalar
+              -I${CMAKE_CURRENT_SOURCE_DIR}/env -I${CMAKE_SOURCE_DIR}/sw/sdk -I${RT}/env -I${RT}/isa/macros/scalar
               -T${CMAKE_CURRENT_SOURCE_DIR}/isa_link.ld -Wl,--no-warn-rwx-segments
               ${RT}/isa/rv32${suite}/${t}.S -o ${out}
       COMMAND ${RISCV_OBJDUMP} -d -M no-aliases ${out} > ${out}.dis
-      DEPENDS ${RT}/isa/rv32${suite}/${t}.S ${CMAKE_CURRENT_SOURCE_DIR}/env/riscv_test.h
+      DEPENDS ${RT}/isa/rv32${suite}/${t}.S ${CMAKE_CURRENT_SOURCE_DIR}/env/riscv_test.h ${CMAKE_SOURCE_DIR}/sw/sdk/torus_exit.h
               ${CMAKE_CURRENT_SOURCE_DIR}/isa_link.ld
       VERBATIM)
     list(APPEND ISA_ELFS ${out})

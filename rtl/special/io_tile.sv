@@ -90,7 +90,7 @@ module io_tile
   logic [15:0]  host_strb, rx_be;
   logic [127:0] host_wdata, host_rdata, rx_wdata;
   logic [31:0]  rx_inc_val;
-  logic         ev_wr, ev_rd, ev_rsp, ev_err;
+  logic         ev_wr, ev_rd, ev_rsp, ev_err, ev_rx;
 
   io_bridge #(.DEPTH(DEPTH), .OUT(OUT)) u_bridge (
     .clk_i, .rst_ni, .x_i(coord_t'(IO_X)), .y_i(coord_t'(IO_Y)),
@@ -101,7 +101,8 @@ module io_tile
     .host_raddr_o(host_raddr), .host_rdata_i(host_rdata),
     .rx_we_o(rx_we), .rx_addr_o(rx_addr), .rx_be_o(rx_be), .rx_wdata_o(rx_wdata),
     .rx_inc_o(rx_inc), .rx_inc_addr_o(rx_inc_addr), .rx_inc_val_o(rx_inc_val),
-    .ev_wr_flit_o(ev_wr), .ev_rd_req_o(ev_rd), .ev_rsp_flit_o(ev_rsp), .ev_rx_err_o(ev_err)
+    .ev_wr_flit_o(ev_wr), .ev_rd_req_o(ev_rd), .ev_rsp_flit_o(ev_rsp), .ev_rx_err_o(ev_err),
+    .ev_rx_flit_o(ev_rx)
   );
 
   io_regs #(.GX(GX), .GY(GY), .OUT(OUT)) u_regs (
@@ -110,6 +111,7 @@ module io_tile
     .host_rdata_o(host_rdata), .host_raddr_i(host_raddr),
     .rx_we_i(rx_we), .rx_addr_i(rx_addr), .rx_be_i(rx_be), .rx_wdata_i(rx_wdata),
     .rx_inc_i(rx_inc), .rx_inc_addr_i(rx_inc_addr), .rx_inc_val_i(rx_inc_val),
-    .ev_wr_flit_i(ev_wr), .ev_rd_req_i(ev_rd), .ev_rsp_flit_i(ev_rsp), .ev_rx_err_i(ev_err)
+    .ev_wr_flit_i(ev_wr), .ev_rd_req_i(ev_rd), .ev_rsp_flit_i(ev_rsp), .ev_rx_err_i(ev_err),
+    .ev_rx_flit_i(ev_rx)
   );
 endmodule

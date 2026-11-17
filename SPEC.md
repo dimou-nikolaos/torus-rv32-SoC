@@ -65,19 +65,19 @@ torus-rv32-SoC/
     noc/          router.sv (pipelined), credit_port.sv, link_slice.sv
     tile/         tile_top.sv, niu.sv, dma.sv, spm_banks.sv, mailbox.sv
     core/         cv32e40x (git submodule) + wrapper with RVFI tap
-    special/      io_tile.sv, io_axi_bridge.sv, io_cdc_fifo.sv, io_fe_jtag_sba.sv, buffer_tile.sv (optional)
+    special/      io_tile.sv (io_axi_front, io_cdc_fifo, io_bridge, io_regs, io_pkg), later io_fe_jtag_sba.sv, buffer_tile.sv (optional)
     perf/         perf_counter.sv, counter_bank.sv (NoC-readable)
     soc/          soc_top.sv (grid generator, parameters NX, NY, I/O row, buffer columns)
   tb/
     common/       testbench helpers: seeds and options, ELF loader
-    models/       golden models: spike_cosim (lockstep), spm_model, later noc_tlm, niu_model, kernel references
+    models/       golden models: spike_cosim (lockstep), spm_model, noc_tlm, router_model, axi_bfm, later kernel references
     unit/         block testbenches (C++ driver + scoreboard): spm, later router, link, NIU
-    soc/          tb_tile (M0), later tb_soc.cpp, axi_bfm.cpp (DPI)
+    soc/          sim_host (the SoC as a libtorus transport), tb_soc (runs ELFs), host_memcpy
   sw/
     sdk/          crt0.S, link.ld, tile.h (DMA, semaphores, coords)
     kernels/      hello, regtest, later ping, memcpy, cannon_gemm, stencil2d, reduce
     isa/          riscv-tests environment for a tile (rv32ui, rv32um)
-    runtime/      libtorus (C++ host API) + examples
+    runtime/      libtorus (C++ host API: Device on a Transport), elf_loader
   model/          perf_model.py (roofline + capacity check)
   syn/            yosys scripts, area reports per module
   fpga/           optional pblock constraints in folded order
@@ -216,7 +216,7 @@ Every tile sees the same local map, and any remote agent addresses a tile as (x,
 | --- | --- | --- |
 | `0x0000_0000`–`0x0000_EFFF` | 60 KB | Code, data, stack, circular buffers (boot at `0x0`) |
 | `0x0000_F000`–`0x0000_FEFF` | 3.75 KB | Semaphores and kernel-defined sync words |
-| `0x0000_FF00`–`0x0000_FFFF` | 256 B | Mailbox: runtime args written by the host |
+| `0x0000_FF00`–`0x0000_FFFF` | 256 B | Mailbox: runtime args written by the host (`0xFF00`–`0xFFEF`), exit word at `0xFFFC` (`0xE000_0000` + exit code, written by the exit sequence) |
 | `0x1000_0000`–`0x1000_00FF` | 256 B | NIU and DMA registers (local core only) |
 | `0x1000_1000`–`0x1000_10FF` | 256 B | Tile control |
 | `0x1000_2000`–`0x1000_2FFF` | 4 KB | Performance counter bank: live view, snapshot view at `+0x800`, `PERF_CMD` at `+0xFF4` |
@@ -339,31 +339,35 @@ xy_t  neighbor (int dx, int dy);                          /* torus wrap over com
 
 All coordinates are router coordinates. `neighbor()` wraps over the NX x NY compute grid and skips the I/O row and buffer columns, so a kernel never needs to know they exist. The ordering rules a kernel may rely on are listed under Ordering and completion; `sem_inc` and `noc_fence` follow the patterns given there.
 
-Host runtime (`sw/runtime`):
+Host runtime (`sw/runtime`, libtorus): a `Device` on top of a `Transport`, the one interface a host flow implements: AXI bursts of 16-byte beats to the I/O tile (posted writes, `sync()`, reads). In Verilator the transport is `SimHost` (tb/soc/sim_host.h: the model, both clocks, the AXI bus functional model, Spike lockstep); on FPGA it will be QDMA. The device finds the I/O tile and the grid size from the register block's `INFO`, and takes any byte range at any local address (scratchpad or registers), split into bursts at 4 KB boundaries.
 
 ```cpp
-torus::Device dev("build/Vsoc", {.nx = 4, .ny = 4});
+torus::SimHost sim(argc, argv, args);                     // or an FPGA transport
+torus::Device dev(sim);
 auto grid = dev.compute_grid();
 auto prog = dev.load_kernel("cannon_gemm.elf", grid);   // multicast once available
 for (auto t : grid) {
     auto blk = block_of(t, N);                            // host-side partitioning
-    dev.write_spm(t, A_ADDR, host_a.block(blk));          // through the I/O tile
-    dev.write_spm(t, B_ADDR, host_b.block(blk));
-    prog.set_args(t, {A_ADDR, B_ADDR, C_ADDR, N, blk});
+    dev.write(t, A_ADDR, host_a.block(blk), bytes);       // through the I/O tile
+    dev.write(t, B_ADDR, host_b.block(blk), bytes);
+    Args a{A_ADDR, B_ADDR, C_ADDR, N, blk};
+    dev.set_args(prog, t, &a, sizeof a);                  // mailbox
 }
 dev.launch(prog);
-dev.wait(prog);                                           // done counter in the I/O tile
-for (auto t : grid) dev.read_spm(t, C_ADDR, host_c.block(block_of(t, N)));
-auto perf = dev.read_counters();                          // compared against the model
+dev.wait(prog);                                           // DONE counter in the I/O tile
+dev.stop(prog);
+for (auto t : grid) dev.read(t, C_ADDR, host_c.block(block_of(t, N)), bytes);
+auto codes = dev.exit_codes(prog);
+auto perf = dev.read_counters(grid);                      // compared against the model
 ```
 
 Launch protocol:
 
-1. Host clears `CTRL.run` on every target tile, selects the counter events it wants and clears the counters (`PERF_CMD.clear`).
-2. Host writes the ELF segments into each tile scratchpad.
-3. Host writes per-tile args into the mailbox.
-4. Host sets `CTRL.run`; cores boot at `0x0`.
-5. Each kernel ends with `dma_wait` on its channels and then `sem_inc(io_xy(), DONE, 1)`; DONE lives in the I/O tile register block, and the host waits until it equals the tile count.
+1. Host clears `CTRL.run` on every target tile, selects the counter events it wants, writes the ELF segments and clears the exit word (`load_kernel`).
+2. Host writes per-tile args into the mailbox (`set_args`).
+3. Host clears DONE and the counters (`PERF_CMD.clear`), then sets `CTRL.run`, last tile first; cores boot at `0x0` (`launch`). In that order a run write only passes tiles that are not running yet, so no counter sees launch traffic.
+4. Each program ends in the exit sequence (sw/sdk/torus_exit.h, used by crt0 and by the ISA test environment): it writes the exit word, waits until both DMA channels are idle, then does `sem_inc(io_xy(), DONE, 1)`; DONE is `SEM[0]` of the I/O tile's register block, and the host waits until it equals the tile count (`wait`), reading it locally without NoC traffic.
+5. Host clears `CTRL.run`, last tile first, and waits on the I/O tile's cycle counter until every stop write has landed (`stop`); each tile's counters then hold exactly the run, plus the stop writes routed through it. Then it reads exit words, results and counters.
 
 Partitioning lives in the host code at first (block indices in the args). Pull it into a small library once two or three kernels share the same block-cyclic or 2D-block layouts.
 
@@ -428,7 +432,9 @@ Seven milestones, each ending in a runnable test rather than a feature list. The
 
 The exit tests summarize the microtasks below, which are the authoritative list.
 
-Progress (2026-11-17): M0 and M1 done. M1 results: per-hop latency 2 cycles plus link slices; every link, router port and NIU port at one flit per cycle; no deadlock in a 2M-cycle saturating soak, while builds without the bubble rule deadlock within thousands of cycles; ping-pong on the 2x2 torus at 352 cycles per 64-byte round trip, dominated by software (DMA setup and polling). Tile area (Yosys generic, in context): about 400k transistors of logic plus 64 KB SRAM with one 64-bit counter per event; the counter bank was then reduced to 2 fixed + 8 programmable 48-bit counters (about 160k to 43k transistors standalone). Next: M2.
+Progress (2026-11-17): M0 and M1 done. M1 results: per-hop latency 2 cycles plus link slices; every link, router port and NIU port at one flit per cycle; no deadlock in a 2M-cycle saturating soak, while builds without the bubble rule deadlock within thousands of cycles; ping-pong on the 2x2 torus at 352 cycles per 64-byte round trip, dominated by software (DMA setup and polling). Tile area (Yosys generic, in context): about 400k transistors of logic plus 64 KB SRAM with one 64-bit counter per event; the counter bank was then reduced to 2 fixed + 8 programmable 48-bit counters (about 160k to 43k transistors standalone).
+
+Progress (2026-11-17): M2 done. Every SoC test now loads and launches through the I/O tile's AXI port with libtorus; the testbench register ports are gone. memcpy on 4x4 (16 KB per tile, each tile to its (+1, +1) neighbor, I/O row in the Y rings): bit-exact, copy phase 1133 cycles (14.5 bytes per cycle per tile, the injection limit is 16), the model predicts 1094 (−3.4%) and every compute router's local, X and Y flit counts exactly. With a (+2, +2) shift every link carries two flows: 3519 cycles where an even split predicts 2122. One input buffer holds a flow that turns X→Y and one that continues on X, and a waiting head blocks the flit behind it (head-of-line blocking). Model v1 needs router queues flit by flit; NoC1 and per-turn buffering are the RTL levers. Areas (Yosys generic): tile about 354k transistors of logic in context (NIU 62k standalone with READ\_REQ queue and reply engine), I/O tile 178k (bridge 66k, register block 49k). Building the SoC models takes minutes, not half an hour, since Verilator's run-once construction code is compiled at -O0. Next: M3.
 
 Keep every exit test in the regression once it passes, so later milestones cannot silently break earlier ones.
 
@@ -527,20 +533,20 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 - [x] I/O row in the grid generator (router-only stops, I/O tile at (0, NY)) → grid elaborates, `compute_grid()` excludes the row (tile control `GRID` register; DMA to a router-only stop is a command error)
 - [x] AXI-to-NoC bridge with burst splitting, byte strobes, `IO_RD_OUTSTANDING` and backpressure → host write lands in any tile's scratchpad
 - [x] I/O tile assembled (AXI front-end, FIFO, bridge, NIU) → I/O tile testbench passes (six AXI:fabric clock ratios; writes and streamed reads at the slower clock's beat rate)
-- [ ] C++ remote read and write API → unit test passes
-- [ ] `CTRL.run` over the NoC → host releases a core remotely
-- [ ] ELF loading through the I/O tile → backdoor removed, hello-world runs
-- [ ] Mailbox and `set_args` → kernel reads its arguments
+- [x] C++ remote read and write API → unit test passes (libtorus `Device::read`/`write`, any range and alignment; every SoC run reads back each loaded image and every tile's registers)
+- [x] `CTRL.run` over the NoC → host releases a core remotely
+- [x] ELF loading through the I/O tile → backdoor removed, hello-world runs (the testbench register ports are gone; every SoC test loads through AXI)
+- [x] Mailbox and `set_args` → kernel reads its arguments
 - [x] READ\_REQ in the NIU, TX-reply engine on its own arbiter port, tag-based completion → remote read returns correct data, and served at full rate while the tile's own DMA streams on the other plane (one plane until M3: replies alone at 1 flit/cycle, shared 0.5/0.5 with DMA)
 - [x] READ\_REQ queue sizing assertion → elaboration fails when the queue is too shallow for the grid
 - [x] READ\_REQ storm (every node at its limit, one target, target injection blocked) → no queue overflow, RX never stalls, watchdog silent (NIU unit test: a full queue plus 40 writes retire at one flit per cycle with injection blocked)
 - [x] `noc_fence` → writes before the fence are visible at the destination when it returns
 - [x] ATOMIC\_INC and semaphores → all tiles increment one counter, final value exact
-- [ ] DONE counter + `dev.wait` → host waits for all tiles
-- [ ] `libtorus` v0 (`Device`, `load_kernel`, `launch`, `wait`) → example program runs
-- [ ] Counter readout over the NoC → `dev.read_counters` returns all banks
-- [ ] memcpy on a 4x4 torus (NoC0) launched from C++ → bit-exact, counters stored
-- [ ] Performance model v0 for memcpy → prediction within tolerance of the counters
+- [x] DONE counter + `dev.wait` → host waits for all tiles
+- [x] `libtorus` v0 (`Device`, `load_kernel`, `launch`, `wait`) → example program runs (tb/soc/host_memcpy.cpp; tb_soc is a libtorus program too)
+- [x] Counter readout over the NoC → `dev.read_counters` returns all banks
+- [x] memcpy on a 4x4 torus (NoC0) launched from C++ → bit-exact, counters stored (build/reports/memcpy_*.json)
+- [x] Performance model v0 for memcpy → prediction within tolerance of the counters (per-link flit counts exact; copy time within 10% when no link is shared: −3.4% on 4x4. Shared links are not timed by v0, see the progress note)
 
 ### M3: second plane
 

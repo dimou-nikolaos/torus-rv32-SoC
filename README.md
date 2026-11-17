@@ -4,7 +4,9 @@ A 2D torus of RV32IM tiles (CV32E40X) with scratchpads, DMA and a credit-based
 two-plane NoC, simulated in Verilator and synthesized in Yosys. The design,
 milestones and verification plan are in [SPEC.md](SPEC.md).
 
-Status: M0 (one tile, Spike lockstep, area report, regression).
+Status: M2 done: the torus on NoC0 with an I/O row; programs are loaded and launched from C++
+(libtorus) through the I/O tile's AXI port; memcpy on 4x4 checked against the performance model.
+Next: M3 (second plane).
 
 ## Topology
 
@@ -68,10 +70,16 @@ builds reuse it while the submodule commit is unchanged.
 tools/dev.sh cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 tools/dev.sh ninja -C build
 
-# Run a program on one tile, Spike in lockstep
-tools/dev.sh build/tb/soc/tb_tile build/sw/hello.elf
-tools/dev.sh build/tb/soc/tb_tile build/sw/regtest.elf --coord=3,5 --trace=build/regtest.fst
-tools/dev.sh build/tb/soc/tb_tile build/sw/isa/rv32ui-add.elf --rvfi-trace
+# Run a program on every tile of a 1x1, 2x2 or 4x4 grid (plus the I/O row),
+# loaded through the I/O tile, Spike in lockstep on every core
+tools/dev.sh build/tb/soc/tb_soc_1x1 build/sw/hello.elf
+tools/dev.sh build/tb/soc/tb_soc_2x2 build/sw/nocops.elf --trace=build/nocops.fst
+tools/dev.sh build/tb/soc/tb_soc_1x1 build/sw/isa/rv32ui-add.elf --rvfi-trace
+tools/dev.sh build/tb/soc/tb_soc_4x4 build/sw/hello.elf --axi-half=10   # slower AXI clock
+
+# memcpy from C++ (libtorus), checked against the performance model
+tools/dev.sh model/perf_model.py run-memcpy --host build/tb/soc/host_memcpy_4x4 \
+    --elf build/sw/memcpy.elf --shift 1,1        # report in build/reports/
 
 # Regression: replay a run or one test from the printed seeds
 tools/dev.sh scripts/regress.py --seed 1234
@@ -88,14 +96,22 @@ Waveforms are FST files; open them on the host with Surfer or GTKWave.
 
 | Path | Contents |
 | --- | --- |
-| `rtl/` | SystemVerilog: `pkg`, `core` (CV32E40X submodule + wrapper), `tile`, `perf`, file lists (`*.f`) |
-| `tb/` | Verilator testbenches: `unit` (block tests), `soc` (tile), `models` (C++ golden models, Spike lockstep), `common` |
-| `sw/` | `sdk` (crt0, linker script, tile.h), `kernels`, `isa` (riscv-tests environment) |
+| `rtl/` | SystemVerilog: `pkg`, `core` (CV32E40X submodule + wrapper), `tile`, `noc`, `perf`, `special` (I/O tile), `soc` (grid generator), file lists (`*.f`) |
+| `tb/` | Verilator testbenches: `unit` (block tests), `soc` (SoC host, tb_soc, host programs), `models` (C++ golden models, Spike lockstep, AXI model), `common` |
+| `sw/` | `sdk` (crt0, linker script, tile.h, exit sequence), `kernels`, `isa` (riscv-tests environment), `runtime` (libtorus host library) |
+| `model/` | `perf_model.py` (performance model) |
 | `scripts/` | `regress.py`, `synth_area.py`, `gen_fold_svg.py` (topology animation) |
 | `tools/`, `docker/` | Pinned versions, image, native setup, `dev.sh` |
 | `third_party/` | Spike and riscv-tests submodules |
 
 ## Notes for kernel writers
+
+- A program ends by returning from `kernel_main` (or calling `exit`): the exit
+  sequence writes the exit word at `0xFFFC` and increments DONE in the I/O
+  tile, which is what the host waits for. Args from the host are in the
+  mailbox at `0xFF00` (`kernel_main`'s argument).
+- `io_xy()`, `grid_nx()`, `grid_ny()` come from the tile's `GRID` register; the
+  I/O row (`y = NY`) is not a compute row.
 
 - Build for `rv32im_zicsr`; the core also implements Zca, but code never uses it.
 - `mtvec` keeps only bits [31:7] on CV32E40X: trap entries must be 128-byte aligned (crt0 does this).

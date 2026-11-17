@@ -3,8 +3,7 @@
 // arbiter is tied off until M5; NoC1 arrives in M3.
 //
 // Remote register accesses to tile control and the counter bank come from the
-// NIU (RX writes and READ_REQ replies). Until the I/O tile exists, the testbench also has a
-// register port here (tb_*), used only while the NoC is quiet.
+// NIU: RX writes and the reply engine's reads.
 module tile_top
   import tile_pkg::*;
   import noc_pkg::*;
@@ -31,16 +30,7 @@ module tile_top
   input  link_t       y_in_i,
   output logic        y_in_credit_o,
   output link_t       y_out_o,
-  input  logic        y_out_credit_i,
-
-  // Testbench register port (M1 scaffolding, removed in M2)
-  input  logic        tb_req_i,
-  input  logic        tb_we_i,
-  input  logic [31:0] tb_addr_i,
-  input  logic [31:0] tb_wdata_i,
-  output logic        tb_rvalid_o,
-  output logic        tb_err_o,
-  output logic [31:0] tb_rdata_o
+  input  logic        y_out_credit_i
 );
   // ------------------------------------------------------------------ core
   logic        run;
@@ -188,50 +178,28 @@ module tile_top
   );
 
   // ----------------------------------------------------------- remote port
-  // Remote accesses from the NIU (RX writes, reply-engine reads) and from the
-  // testbench (M1 scaffolding).
-  logic        rmt_req, rmt_we;
-  logic [31:0] rmt_addr, rmt_wdata;
-  logic [3:0]  rmt_be;
-  assign rmt_req   = niu_rmt_req || tb_req_i;
-  assign rmt_we    = niu_rmt_req ? niu_rmt_we : tb_we_i;
-  assign rmt_addr  = niu_rmt_req ? niu_rmt_addr : tb_addr_i;
-  assign rmt_be    = niu_rmt_req ? niu_rmt_be : 4'hF;
-  assign rmt_wdata = niu_rmt_req ? niu_rmt_wdata : tb_wdata_i;
-
   reg_req_t rmt_tctrl_req, rmt_perf_req;
   reg_rsp_t rmt_tctrl_rsp, rmt_perf_rsp;
-  logic     rmt_hit_tctrl, rmt_hit_perf, rmt_bad_q, rmt_q, tb_q;
-  assign rmt_hit_tctrl = rmt_addr[31:12] == TCTRL_BASE[31:12];
-  assign rmt_hit_perf  = rmt_addr[31:12] == PERF_BASE[31:12];
+  logic     rmt_hit_tctrl, rmt_hit_perf, rmt_bad_q, rmt_q;
+  assign rmt_hit_tctrl = niu_rmt_addr[31:12] == TCTRL_BASE[31:12];
+  assign rmt_hit_perf  = niu_rmt_addr[31:12] == PERF_BASE[31:12];
   always_comb begin
-    rmt_tctrl_req       = '{req: rmt_req && rmt_hit_tctrl, we: rmt_we, addr: rmt_addr[11:0], be: rmt_be, wdata: rmt_wdata};
-    rmt_perf_req        = rmt_tctrl_req;
-    rmt_perf_req.req    = rmt_req && rmt_hit_perf;
+    rmt_tctrl_req     = '{req: niu_rmt_req && rmt_hit_tctrl, we: niu_rmt_we, addr: niu_rmt_addr[11:0],
+                          be: niu_rmt_be, wdata: niu_rmt_wdata};
+    rmt_perf_req      = rmt_tctrl_req;
+    rmt_perf_req.req  = niu_rmt_req && rmt_hit_perf;
   end
   always_ff @(posedge clk_i or negedge rst_ni)
     if (!rst_ni) begin
       rmt_bad_q <= 1'b0;
       rmt_q     <= 1'b0;
-      tb_q      <= 1'b0;
     end else begin
-      rmt_bad_q <= rmt_req && !rmt_hit_tctrl && !rmt_hit_perf;
-      rmt_q     <= rmt_req;
-      tb_q      <= tb_req_i && !niu_rmt_req;
+      rmt_bad_q <= niu_rmt_req && !rmt_hit_tctrl && !rmt_hit_perf;
+      rmt_q     <= niu_rmt_req;
     end
   assign rmt_rvalid = rmt_q;
   assign rmt_err    = rmt_tctrl_rsp.err || rmt_perf_rsp.err || rmt_bad_q;
   assign rmt_rdata  = rmt_tctrl_rsp.rdata | rmt_perf_rsp.rdata;
-
-  assign tb_rvalid_o = tb_q;
-  assign tb_err_o    = tb_q && rmt_err;
-  assign tb_rdata_o  = rmt_rdata;
-
-`ifndef SYNTHESIS
-  always_ff @(posedge clk_i or negedge rst_ni)
-    if (rst_ni) assert (!(tb_req_i && niu_rmt_req))
-      else $error("tile_top (%0d,%0d): testbench register access collided with a NoC write", coord_x_i, coord_y_i);
-`endif
 
   // ------------------------------------------------------- register blocks
   logic [63:0] cycle;

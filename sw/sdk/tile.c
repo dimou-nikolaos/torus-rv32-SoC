@@ -59,11 +59,9 @@ void console_puts(const char *s) {
   while (*s) console_putc(*s++);
 }
 
-void tile_exit(int code) {
-  mmio_write(TILE_CONSOLE_BASE + CONSOLE_EXIT, (uint32_t)code);
-  for (;;) {
-  }
-}
+void torus_exit(int code) __attribute__((noreturn));   // crt0.S
+
+void tile_exit(int code) { torus_exit(code); }
 
 static void put_hex(uint32_t v) {
   for (int i = 7; i >= 0; i--) console_putc("0123456789abcdef"[(v >> (4 * i)) & 0xf]);

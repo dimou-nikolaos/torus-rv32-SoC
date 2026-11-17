@@ -1,22 +1,46 @@
-// SoC testbench top: the torus of tiles plus one RVFI monitor per tile that
-// hands every retired instruction to the C++ lockstep checker of that tile.
+// SoC testbench top: the SoC (tiles, I/O row, I/O tile with its AXI port) plus
+// one RVFI monitor per tile that hands every retired instruction to the C++
+// lockstep checker of that tile.
 module tb_soc_top #(
   parameter int unsigned NX         = 1,
   parameter int unsigned NY         = 1,
-  parameter int unsigned LINK_SLICE = 0,
-  localparam int unsigned N         = NX * NY
+  parameter int unsigned LINK_SLICE = 0
 ) (
-  input  logic              clk_i,
-  input  logic              rst_ni,
-  input  logic [N-1:0]      tb_req_i,
-  input  logic [N-1:0]      tb_we_i,
-  input  logic [N-1:0][31:0] tb_addr_i,
-  input  logic [N-1:0][31:0] tb_wdata_i,
-  output logic [N-1:0]      tb_rvalid_o,
-  output logic [N-1:0]      tb_err_o,
-  output logic [N-1:0][31:0] tb_rdata_o
+  input  logic          clk_i,
+  input  logic          rst_ni,
+  input  logic          aclk_i,
+  input  logic          arst_ni,
+  input  logic [3:0]    s_axi_awid_i,
+  input  logic [31:0]   s_axi_awaddr_i,
+  input  logic [7:0]    s_axi_awlen_i,
+  input  logic [2:0]    s_axi_awsize_i,
+  input  logic [1:0]    s_axi_awburst_i,
+  input  logic          s_axi_awvalid_i,
+  output logic          s_axi_awready_o,
+  input  logic [127:0]  s_axi_wdata_i,
+  input  logic [15:0]   s_axi_wstrb_i,
+  input  logic          s_axi_wlast_i,
+  input  logic          s_axi_wvalid_i,
+  output logic          s_axi_wready_o,
+  output logic [3:0]    s_axi_bid_o,
+  output logic [1:0]    s_axi_bresp_o,
+  output logic          s_axi_bvalid_o,
+  input  logic          s_axi_bready_i,
+  input  logic [3:0]    s_axi_arid_i,
+  input  logic [31:0]   s_axi_araddr_i,
+  input  logic [7:0]    s_axi_arlen_i,
+  input  logic [2:0]    s_axi_arsize_i,
+  input  logic [1:0]    s_axi_arburst_i,
+  input  logic          s_axi_arvalid_i,
+  output logic          s_axi_arready_o,
+  output logic [3:0]    s_axi_rid_o,
+  output logic [127:0]  s_axi_rdata_o,
+  output logic [1:0]    s_axi_rresp_o,
+  output logic          s_axi_rlast_o,
+  output logic          s_axi_rvalid_o,
+  input  logic          s_axi_rready_i
 );
-  soc_top #(.NX(NX), .NY(NY), .LINK_SLICE(LINK_SLICE)) u_soc (.*);
+  soc_top #(.NX(NX), .NY(NY), .LINK_SLICE(LINK_SLICE), .IDW(4)) u_soc (.*);
 
   import "DPI-C" function void torus_rvfi_retire(
     input int     hart,
