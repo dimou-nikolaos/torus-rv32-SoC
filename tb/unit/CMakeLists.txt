@@ -69,3 +69,13 @@ torus_verilated_tb(tb_niu
   FLISTS rtl/tile/niu.f
   SV     tb/unit/niu/tb_niu_top.sv
   CPP    ${CMAKE_CURRENT_SOURCE_DIR}/niu/tb_niu.cpp)
+
+# Async FIFO (the I/O tile's clock crossing): two depths
+foreach(depth 8 16)
+  set(name tb_cdc_d${depth})
+  torus_verilated_tb(${name}
+    TOP    tb_cdc_top
+    SV     rtl/special/io_cdc_fifo.sv tb/unit/cdc/tb_cdc_top.sv
+    CPP    ${CMAKE_CURRENT_SOURCE_DIR}/cdc/tb_cdc.cpp
+    ARGS   -GDEPTH=${depth})
+endforeach()

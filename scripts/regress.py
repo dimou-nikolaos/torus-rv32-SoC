@@ -49,6 +49,8 @@ def discover(args):
         tests.append(Test(f"unit.link.{cfg}", [str(BUILD / f"tb/unit/tb_link_{cfg}")]))
     for i in range(3):
         tests.append(Test(f"unit.niu.{i}", [str(BUILD / "tb/unit/tb_niu")]))
+    for depth in (8, 16):
+        tests.append(Test(f"unit.cdc.d{depth}", [str(BUILD / f"tb/unit/tb_cdc_d{depth}"), "--quiet"]))
     for d in (0, 1):
         for sl in (0, 1, 2):
             tests.append(Test(f"unit.router.p{d}_s{sl}", [str(BUILD / f"tb/unit/tb_router_p{d}_s{sl}")]))

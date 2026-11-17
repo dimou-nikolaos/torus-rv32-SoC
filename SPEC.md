@@ -520,7 +520,7 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 ### M2: I/O tile and launch
 
 - [ ] C++ AXI bus functional model through DPI → burst write and read test against a memory model
-- [ ] Async CDC FIFO → randomized clock-ratio test passes, no loss or duplication
+- [x] Async CDC FIFO → randomized clock-ratio test passes, no loss or duplication (ratios 1:1 to 1:9 both ways, drifting near-equal clocks, jitter; full throughput at the slower clock with depth 8)
 - [x] I/O row in the grid generator (router-only stops, I/O tile at (0, NY)) → grid elaborates, `compute_grid()` excludes the row (tile control `GRID` register; DMA to a router-only stop is a command error)
 - [ ] AXI-to-NoC bridge with burst splitting, byte strobes, `IO_RD_OUTSTANDING` and backpressure → host write lands in any tile's scratchpad
 - [ ] I/O tile assembled (AXI front-end, FIFO, bridge, NIU) → I/O tile testbench passes
