@@ -25,3 +25,18 @@ torus_verilated_tb(tb_flit
   FLISTS rtl/noc/noc.f
   SV     tb/unit/flit/tb_flit_top.sv
   CPP    ${CMAKE_CURRENT_SOURCE_DIR}/flit/tb_flit.cpp)
+
+# Router: both planes, slice depths 0..2
+foreach(dir 0 1)
+  foreach(slice 0 1 2)
+    math(EXPR depth "5 + 2 * ${slice}")
+    set(name tb_router_p${dir}_s${slice})
+    torus_verilated_tb(${name}
+      TOP    tb_router_top
+      FLISTS rtl/noc/noc.f
+      SV     tb/unit/router/tb_router_top.sv
+      CPP    ${CMAKE_CURRENT_SOURCE_DIR}/router/tb_router.cpp
+      ARGS   -GDIR=${dir} -GSLICE=${slice} -GDEPTH=${depth})
+    target_compile_definitions(${name} PRIVATE R_DIR=${dir} R_SLICE=${slice})
+  endforeach()
+endforeach()

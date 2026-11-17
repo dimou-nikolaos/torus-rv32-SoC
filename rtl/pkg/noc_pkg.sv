@@ -39,6 +39,8 @@ package noc_pkg;
     P_Y     = 2'd2
   } port_e;
   localparam int unsigned NPORTS = 3;
+  // The same ports as integer indices into per-port arrays
+  localparam int unsigned IL = 0, IX = 1, IY = 2;
 
   // Forward half of a link: flit, valid and the lookahead port. The backward
   // half is one credit wire (one credit per cycle at most).
@@ -51,7 +53,7 @@ package noc_pkg;
   // Credit round trip, in cycles, of a link with `slices` register slices in each
   // direction: send decision -> output register -> slices -> input buffer -> pop
   // -> credit register -> slices -> counter. An input buffer at least this deep
-  // sustains one flit per cycle.
+  // sustains one flit per cycle; router buffers add one slot for the bubble rule.
   function automatic int unsigned credit_rtt(int unsigned slices);
     return 4 + 2 * slices;
   endfunction

@@ -47,10 +47,16 @@ def discover(args):
     tests.append(Test("unit.flit", [str(BUILD / "tb/unit/tb_flit")]))
     for cfg in ("s0_d4", "s1_d6", "s2_d8", "s0_d3", "s2_d7"):
         tests.append(Test(f"unit.link.{cfg}", [str(BUILD / f"tb/unit/tb_link_{cfg}")]))
+    for d in (0, 1):
+        for sl in (0, 1, 2):
+            tests.append(Test(f"unit.router.p{d}_s{sl}", [str(BUILD / f"tb/unit/tb_router_p{d}_s{sl}")]))
     # Elaboration must reject an input buffer below the credit round trip
     tests.append(Test("lint.link_too_shallow", lint + [
         "--top-module", "tb_link_top", "-GSLICE=1", "-GDEPTH=5",
         "-f", "rtl/noc/noc.f", "tb/unit/link/tb_link_top.sv"], seeded=False, expect_fail=True))
+    tests.append(Test("lint.router_too_shallow", lint + [
+        "--top-module", "noc_router", "-GLINK_SLICE=1", "-GDEPTH=6",
+        "-f", "rtl/noc/noc.f"], seeded=False, expect_fail=True))
     tb = str(BUILD / "tb/soc/tb_tile")
     tests.append(Test("tile.hello", [tb, str(BUILD / "sw/hello.elf")]))
     tests.append(Test("tile.regtest", [tb, str(BUILD / "sw/regtest.elf"), "--coord=3,5"]))

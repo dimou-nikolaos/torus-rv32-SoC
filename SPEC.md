@@ -142,9 +142,9 @@ Each plane has its own router per grid position: one 3x3 module, instantiated tw
 | --- | --- |
 | X ring | X ring (continue), Y ring (turn, bubble rule applies), local |
 | Y ring | Y ring (continue), local |
-| Local | X ring or Y ring (injection, bubble rule applies) |
+| Local | X ring or Y ring (injection, bubble rule applies), or local (loopback) |
 
-That is 7 of the 9 crossbar paths; the switch allocator and crossbar implement only those. Router-only stops in the I/O row use the same module with the local port tied off. Every port is a generic credit port (flit, valid, credit return), so a cluster-level router or an express link can attach later without changing the interface. Two pipeline stages per hop with lookahead routing (see Open decisions): each router computes the output port the flit will take at the next router, so allocation never waits for route computation.
+Together with local to local (the NIU loopback), that is 8 of the 9 crossbar paths; only Y to X is illegal, and the router asserts it never occurs. Router-only stops in the I/O row use the same module with the local port tied off. Every port is a generic credit port (flit, valid, credit return), so a cluster-level router or an express link can attach later without changing the interface. Two pipeline stages per hop with lookahead routing (see Open decisions): each router computes the output port the flit will take at the next router, so allocation never waits for route computation.
 
 ### Scratchpad bank arbiter
 
@@ -389,7 +389,7 @@ Three points need care:
 
 With no contention and a receiver that never stalls, every link, router port and NIU port moves one flit per cycle, back to back. A bubble is a cycle in which a sender holds a valid flit and has a credit, yet the link stays idle. Bubbles are bugs, not tuning.
 
-Design requirement: each input buffer is at least as deep as the credit round trip (forward link latency, slice depth included, plus the stage that frees the slot, plus the credit return latency). An elaboration-time assertion on the parameters fails the build if a buffer is too shallow.
+Design requirement: each input buffer is at least as deep as the credit round trip (forward link latency, slice depth included, plus the stage that frees the slot, plus the credit return latency), which is `4 + 2 × slices` cycles, plus one slot: a flit entering a ring needs two credits, so an injection or turn stream can never use the last one. Router input buffers therefore hold `5 + 2 × slices` flits. An elaboration-time assertion on the parameters fails the build if a buffer is too shallow.
 
 | Check | Stimulus | Pass |
 | --- | --- | --- |
