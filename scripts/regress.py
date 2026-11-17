@@ -32,15 +32,25 @@ def derive_seed(base, name):
 
 
 class Test:
-    def __init__(self, name, cmd, seeded=True, timeout=600):
+    def __init__(self, name, cmd, seeded=True, timeout=600, expect_fail=False):
         self.name, self.cmd, self.seeded, self.timeout = name, cmd, seeded, timeout
+        self.expect_fail = expect_fail  # negative tests: must exit nonzero
 
 
 def discover(args):
-    tests = [Test("lint.tile", ["verilator", "--lint-only", "-Wall", "--top-module", "tile_top",
-                                "-f", "rtl/tile/tile_sim.f"], seeded=False)]
+    lint = ["verilator", "--lint-only", "-Wall", "-Werror-USERFATAL", "-Werror-USERERROR",
+            "rtl/lint/vendor.vlt"]
+    tests = [Test("lint.tile", lint + ["--top-module", "tile_top", "-f", "rtl/tile/tile_sim.f"],
+                  seeded=False)]
     for i in range(args.spm_seeds):
         tests.append(Test(f"unit.spm.{i}", [str(BUILD / "tb/unit/tb_spm"), "--cycles=200000"]))
+    tests.append(Test("unit.flit", [str(BUILD / "tb/unit/tb_flit")]))
+    for cfg in ("s0_d4", "s1_d6", "s2_d8", "s0_d3", "s2_d7"):
+        tests.append(Test(f"unit.link.{cfg}", [str(BUILD / f"tb/unit/tb_link_{cfg}")]))
+    # Elaboration must reject an input buffer below the credit round trip
+    tests.append(Test("lint.link_too_shallow", lint + [
+        "--top-module", "tb_link_top", "-GSLICE=1", "-GDEPTH=5",
+        "-f", "rtl/noc/noc.f", "tb/unit/link/tb_link_top.sv"], seeded=False, expect_fail=True))
     tb = str(BUILD / "tb/soc/tb_tile")
     tests.append(Test("tile.hello", [tb, str(BUILD / "sw/hello.elf")]))
     tests.append(Test("tile.regtest", [tb, str(BUILD / "sw/regtest.elf"), "--coord=3,5"]))
@@ -70,6 +80,9 @@ def run(test, base_seed):
     except subprocess.TimeoutExpired as e:
         rc, out = -1, (e.stdout or "") + f"\nTIMEOUT after {test.timeout}s\n"
     dt = time.time() - t0
+    if test.expect_fail:
+        rc = 0 if rc != 0 else 1
+        out += "\n(negative test: a nonzero exit is the expected result)\n"
     log.write_text(f"$ {shlex.join(cmd)}\n{out}")
     return test, rc, dt, seed, out, cmd
 

@@ -50,6 +50,7 @@ function(torus_verilated_tb name)
     TOP_MODULE ${TB_TOP}
     PREFIX V${TB_TOP}
     TRACE_FST
-    VERILATOR_ARGS -Wall --assert --x-assign unique --x-initial unique --x-initial-edge -O3
-                   --timing ${opts} ${TB_ARGS})
+    VERILATOR_ARGS -Wall -Werror-USERFATAL -Werror-USERERROR --assert
+                   --x-assign unique --x-initial unique --x-initial-edge -O3
+                   --timing ${CMAKE_SOURCE_DIR}/rtl/lint/vendor.vlt ${opts} ${TB_ARGS})
 endfunction()

@@ -1,5 +1,4 @@
 // Compute tile for simulation (paths relative to repo root)
-rtl/lint/vendor.vlt
 -f rtl/core/core_sim.f
 rtl/pkg/tile_pkg.sv
 rtl/tile/reg_rsp_stage.sv
