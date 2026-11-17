@@ -6,6 +6,34 @@ milestones and verification plan are in [SPEC.md](SPEC.md).
 
 Status: M0 (one tile, Spike lockstep, area report, regression).
 
+## Topology
+
+<p align="center">
+  <img src="docs/img/torus_fold.svg" width="520"
+       alt="An 8x8 torus with its I/O row folding once per dimension and interleaving into its physical layout">
+</p>
+
+The NoC is a 2D torus of NX x NY compute tiles plus an I/O row at `y = NY`,
+which holds the I/O tile at `(0, NY)` and router-only stops. Laid out in logical
+order, every wraparound link would span the whole die. Each ring is instead
+folded once and its two layers interleaved, starting from a rotation that puts
+the I/O row on a die edge, where the pads are. At 8x8 that gives the physical
+column order `0 7 1 6 2 5 3 4` and row order `8 7 0 6 1 5 2 4 3`, so every link,
+wraparound included, spans at most two tile pitches. The fold is a placement
+decision only: the RTL is the same, and the floorplan (ASIC) or pblocks (FPGA)
+apply it. With the optional buffer columns (`x = NX/2` and `x = NX + 1`) both
+land on the left and right edges:
+[docs/img/torus_fold_buffers.svg](docs/img/torus_fold_buffers.svg).
+
+Regenerate the animations after a topology change (the script checks the
+two-pitch link bound):
+
+```sh
+python3 scripts/gen_fold_svg.py --nx 8 --ny 8 -o docs/img/torus_fold.svg
+python3 scripts/gen_fold_svg.py --nx 8 --ny 8 --buffer-cols -o docs/img/torus_fold_buffers.svg
+python3 scripts/gen_fold_svg.py --nx 8 --ny 8 --frame 14.5 -o final.svg   # one static frame
+```
+
 ## Quick start
 
 Everything runs in the pinned tool image (tools/versions.env); Docker is the
@@ -62,7 +90,7 @@ Waveforms are FST files; open them on the host with Surfer or GTKWave.
 | `rtl/` | SystemVerilog: `pkg`, `core` (CV32E40X submodule + wrapper), `tile`, `perf`, file lists (`*.f`) |
 | `tb/` | Verilator testbenches: `unit` (block tests), `soc` (tile), `models` (C++ golden models, Spike lockstep), `common` |
 | `sw/` | `sdk` (crt0, linker script, tile.h), `kernels`, `isa` (riscv-tests environment) |
-| `scripts/` | `regress.py`, `synth_area.py` |
+| `scripts/` | `regress.py`, `synth_area.py`, `gen_fold_svg.py` (topology animation) |
 | `tools/`, `docker/` | Pinned versions, image, native setup, `dev.sh` |
 | `third_party/` | Spike and riscv-tests submodules |
 

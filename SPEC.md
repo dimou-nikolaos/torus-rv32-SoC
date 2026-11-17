@@ -132,7 +132,7 @@ Compute tile (the engine and its links arrive in M5):
 
 The core never touches the network directly: it writes NIU registers and reads its own scratchpad, while the NIU moves data in and out of the same banks.
 
-The fold is never in the RTL. The same netlist is placed in folded order by the ASIC floorplan, or by pblocks on FPGA, and on FPGA only when timing closure needs it. A folded ring of length L puts logical positions `r` and `r + L/2` on the two edges for any rotation `r`; the Y fold is rotated so the I/O row lands on a die edge. If tiles are later grouped into clusters, the cluster is the unit of the fold.
+The fold is never in the RTL. The same netlist is placed in folded order by the ASIC floorplan, or by pblocks on FPGA, and on FPGA only when timing closure needs it. A folded ring of length L puts logical positions `r` and `r + L/2` on the two edges for any rotation `r`; the Y fold is rotated so the I/O row lands on a die edge. If tiles are later grouped into clusters, the cluster is the unit of the fold. `scripts/gen_fold_svg.py` draws the fold for the README (`docs/img/torus_fold*.svg`) and checks the two-pitch link bound; regenerate it whenever the grid parameters change.
 
 ### Router
 
