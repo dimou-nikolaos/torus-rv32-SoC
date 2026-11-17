@@ -452,13 +452,13 @@ Risks to check first:
 
 M0 exit checklist:
 
-- [ ] Image built in CI from pinned versions and pullable from the registry
+- [x] Image built in CI from pinned versions and pullable from the registry
 - [x] Tile passes Verilator lint and Yosys elaboration
 - [x] Hello-world prints and exits cleanly
 - [x] ISA tests pass with zero Spike mismatches
 - [x] Counters read out on every run
-- [ ] Area report per module produced in CI
-- [ ] `regress.py` green locally and in CI
+- [x] Area report per module produced in CI
+- [x] `regress.py` green locally and in CI
 
 ## Microtasks per milestone
 
@@ -470,7 +470,7 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 - [x] Dockerfile from OSS CAD Suite + RISC-V GCC + Python → image builds, versions logged
 - [x] Slang frontend check → `yosys -m slang` reads a small SystemVerilog test, or the sv2v fallback is decided
 - [x] Spike submodule built by CMake → `spike --help` runs from the build tree
-- [ ] CI job builds the image on versions.env changes and pushes it to the registry → image pullable by its hash tag
+- [x] CI job builds the image on versions.env changes and pushes it to the registry → image pullable by its hash tag
 - [x] CV32E40X submodule configured RV32IM → core passes Verilator lint
 - [x] Core wrapper with instruction and data ports (32-bit OBI to 128-bit bank adapter) → wrapper passes lint and Yosys elaboration
 - [x] Scratchpad bank module + C++ model → random read/write unit test passes
@@ -485,7 +485,7 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 - [x] Lockstep on the ISA tests → zero mismatches
 - [x] Counter bank v0 → counters printed on every run
 - [x] Yosys flow for the tile → area report per module
-- [ ] `regress.py` with seeds and JUnit → one command green locally and in CI
+- [x] `regress.py` with seeds and JUnit → one command green locally and in CI
 
 ### M1: 2x2 mesh, pipelined credit-based router
 
