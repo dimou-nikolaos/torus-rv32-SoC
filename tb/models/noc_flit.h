@@ -7,7 +7,7 @@
 
 namespace torus {
 
-enum class Op : uint8_t { Write = 0, ReadReq = 1, AtomicInc = 2, Multicast = 3 };
+enum class Op : uint8_t { Write = 0, ReadReq = 1, AtomicInc = 2, Multicast = 3, ReadRsp = 4 };
 enum class Port : uint8_t { Local = 0, X = 1, Y = 2 };
 
 struct Flit {

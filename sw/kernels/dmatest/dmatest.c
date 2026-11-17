@@ -74,7 +74,10 @@ int kernel_main(const args_t *args) {
     {0xFFF0u, (uint32_t)dst_b, 0, 32, NIU_OP_WRITE},                   // source past the scratchpad
     {(uint32_t)src_b, (uint32_t)dst_b, 0x0F0F, 16, NIU_OP_WRITE},      // outside the grid
     {(uint32_t)src_b, (uint32_t)dst_b, 0x10000, 16, NIU_OP_WRITE},     // upper bits set
-    {(uint32_t)src_b, (uint32_t)dst_b, 0, 16, NIU_OP_READ_REQ},        // not before M2
+    {(uint32_t)src_b, (uint32_t)dst_b, 0, 16, 3},                      // MULTICAST: not before M4
+    {(uint32_t)src_b, (uint32_t)dst_b, 0, 16, 7},                      // reserved op
+    {0xFFF0u, (uint32_t)dst_b, 0, 32, NIU_OP_READ_REQ},                // read landing past the scratchpad
+    {(uint32_t)src_b, (uint32_t)dst_b + 2, 0, 16, NIU_OP_ATOMIC_INC},  // atomic not word-aligned
     {(uint32_t)src_b, (uint32_t)dst_b, 0, 16, NIU_OP_WRITE | 2u << 3}, // NoC1 forced: not before M3
   };
   for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++) {

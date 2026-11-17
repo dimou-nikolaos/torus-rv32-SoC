@@ -9,6 +9,7 @@ module tb_spm_top
   input  logic [SPM_PORTS-1:0]              req_i,
   input  logic [SPM_PORTS-1:0]              we_i,
   input  logic [SPM_PORTS-1:0]              lock_i,
+  input  logic [SPM_PORTS-1:0]              add_i,
   input  logic [SPM_PORTS-1:0][SPM_AW-1:0]  addr_i,
   input  logic [SPM_PORTS-1:0][15:0]        be_i,
   input  logic [SPM_PORTS-1:0][127:0]       wdata_i,
@@ -23,7 +24,7 @@ module tb_spm_top
 
   always_comb
     for (int p = 0; p < SPM_PORTS; p++) begin
-      req[p]      = '{req: req_i[p], we: we_i[p], lock: lock_i[p], addr: addr_i[p],
+      req[p]      = '{req: req_i[p], we: we_i[p], lock: lock_i[p], add: add_i[p], addr: addr_i[p],
                       be: be_i[p], wdata: wdata_i[p]};
       gnt_o[p]    = rsp[p].gnt;
       rvalid_o[p] = rsp[p].rvalid;

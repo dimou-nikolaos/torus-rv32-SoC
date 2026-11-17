@@ -25,6 +25,7 @@ module obi_spm_adapter
     spm_req_o.req   = req_i;
     spm_req_o.we    = we_i;
     spm_req_o.lock  = 1'b0;
+    spm_req_o.add   = 1'b0;
     spm_req_o.addr  = addr_i[SPM_AW-1:0];
     spm_req_o.be    = 16'(be_i) << (4 * addr_i[3:2]);
     spm_req_o.wdata = {4{wdata_i}};

@@ -15,6 +15,41 @@ void dma_write(int ch, uint32_t src, xy_t dst, uint32_t dst_addr, uint32_t len) 
   mmio_write(base + NIU_CMD, NIU_OP_WRITE);
 }
 
+void dma_read(xy_t src, uint32_t src_addr, uint32_t dst, uint32_t len) {
+  uint32_t base = NIU_CH(0);
+  mmio_write(base + NIU_SRC, dst);
+  mmio_write(base + NIU_DST_ADDR, src_addr);
+  mmio_write(base + NIU_DST_XY, (uint32_t)src.x | (uint32_t)src.y << 8);
+  mmio_write(base + NIU_LEN, len);
+  mmio_write(base + NIU_CMD, NIU_OP_READ_REQ);
+}
+
+static void atomic_inc(xy_t dst, uint32_t sem_addr, uint32_t n, uint32_t flags) {
+  uint32_t base = NIU_CH(1);
+  dma_wait(1);
+  mmio_write(base + NIU_DST_ADDR, sem_addr);
+  mmio_write(base + NIU_DST_XY, (uint32_t)dst.x | (uint32_t)dst.y << 8);
+  mmio_write(base + NIU_CMD, NIU_OP_ATOMIC_INC | flags | NIU_CMD_ARG(n));
+  dma_wait(1);
+}
+
+void sem_inc(xy_t dst, uint32_t sem_addr, uint32_t n) { atomic_inc(dst, sem_addr, n, 0); }
+void sem_inc_doorbell(xy_t dst, uint32_t sem_addr, uint32_t n) { atomic_inc(dst, sem_addr, n, NIU_CMD_DOORBELL); }
+
+void noc_fence(xy_t dst) {
+  static uint8_t landing[16] __attribute__((aligned(16)));
+  dma_wait(0);
+  dma_read(dst, 0, (uint32_t)landing, sizeof landing);
+  dma_wait(0);
+}
+
+xy_t neighbor(int dx, int dy) {
+  xy_t me = my_xy();
+  int nx = (int)grid_nx(), ny = (int)grid_ny();
+  xy_t r = {(uint8_t)(((me.x + dx) % nx + nx) % nx), (uint8_t)(((me.y + dy) % ny + ny) % ny)};
+  return r;
+}
+
 void dma_wait(int ch) {
   while (niu_status(ch) & NIU_STATUS_BUSY) {
   }

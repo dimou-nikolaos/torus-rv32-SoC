@@ -24,6 +24,9 @@ TORUS_IMAGE=torus-tools:local tools/dev.sh scripts/regress.py --no-build --seed 
 - Verilator runs at CMake configure time: a lint warning (`-Wall`, fatal) fails
   configuration, and the old binary is left in place. Check the build output
   before trusting a test result, especially in mutation tests.
+- If a Verilator run fails (lint) and a later one changes how many C++ files it
+  splits into, the link fails with undefined `___024root__*` symbols: delete
+  that target's `V<top>.dir` under build/ and reconfigure.
 - Spike builds once into build/spike-install (about 5 minutes) and is reused
   while the submodule commit is unchanged.
 

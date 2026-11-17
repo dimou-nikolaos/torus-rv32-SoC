@@ -1,9 +1,9 @@
-// Compute tile, M1: core, scratchpad with the seven-port arbiter, tile control,
+// Compute tile: core, scratchpad with the seven-port arbiter, tile control,
 // counter bank, console, NIU and the NoC0 router. The engine port of the
 // arbiter is tied off until M5; NoC1 arrives in M3.
 //
 // Remote register accesses to tile control and the counter bank come from the
-// NIU (WRITE flits). Until the I/O tile exists (M2), the testbench also has a
+// NIU (RX writes and READ_REQ replies). Until the I/O tile exists, the testbench also has a
 // register port here (tb_*), used only while the NoC is quiet.
 module tile_top
   import tile_pkg::*;
@@ -13,6 +13,7 @@ module tile_top
   parameter int unsigned NX           = 1,    // compute grid; the router grid adds the I/O row
   parameter int unsigned NY           = 1,
   parameter int unsigned LINK_SLICE   = 0,
+  parameter int unsigned IO_RD_OUTSTANDING = 8,   // READ_REQs the I/O bridge keeps in flight
   localparam int unsigned GX          = NX,   // NoC ring lengths
   localparam int unsigned GY          = NY + 1,
   localparam int unsigned DEPTH       = credit_rtt(LINK_SLICE) + 1
@@ -72,10 +73,9 @@ module tile_top
   spm_rsp_t spm_rsp [SPM_PORTS];
   logic [SPM_PORTS-1:0] spm_denied, spm_promoted;
 
-  // Engine (M5), NoC1 receive and the reply engine (M2/M3) are not connected yet
+  // Engine (M5) and NoC1 receive (M3) are not connected yet
   assign spm_req[PORT_ENGINE] = '0;
   assign spm_req[PORT_RX1]    = '0;
-  assign spm_req[PORT_TXREP]  = '0;
 
   spm_banks #(.STARVE_LIMIT(STARVE_LIMIT)) u_spm (
     .clk_i, .rst_ni, .req_i(spm_req), .rsp_o(spm_rsp),
@@ -143,16 +143,23 @@ module tile_top
   // ------------------------------------------------------------ NIU, router
   link_t inj, ej;
   logic  inj_credit, ej_credit;
-  logic  niu_rmt_req;
+  logic  niu_rmt_req, niu_rmt_we;
   logic [31:0] niu_rmt_addr, niu_rmt_wdata;
+  logic [3:0]  niu_rmt_be;
+  logic  rmt_rvalid, rmt_err;
+  logic [31:0] rmt_rdata;
+  logic  doorbell;
   logic  ev_tx, ev_rx, ev_err;
 
-  niu #(.GX(GX), .GY(GY), .IO_ROW(1'b1), .DEPTH(DEPTH)) u_niu (
+  niu #(.GX(GX), .GY(GY), .IO_ROW(1'b1), .DEPTH(DEPTH), .RQ_NEEDED(NX * NY + IO_RD_OUTSTANDING)) u_niu (
     .clk_i, .rst_ni, .x_i(coord_t'(coord_x_i)), .y_i(coord_t'(coord_y_i)),
     .reg_req_i(niu_req), .reg_rsp_o(niu_rsp),
-    .tx_spm_req_o(spm_req[PORT_TXDMA]), .tx_spm_rsp_i(spm_rsp[PORT_TXDMA]),
-    .rx_spm_req_o(spm_req[PORT_RX0]),   .rx_spm_rsp_i(spm_rsp[PORT_RX0]),
-    .rmt_req_o(niu_rmt_req), .rmt_addr_o(niu_rmt_addr), .rmt_wdata_o(niu_rmt_wdata),
+    .tx_spm_req_o (spm_req[PORT_TXDMA]), .tx_spm_rsp_i (spm_rsp[PORT_TXDMA]),
+    .rep_spm_req_o(spm_req[PORT_TXREP]), .rep_spm_rsp_i(spm_rsp[PORT_TXREP]),
+    .rx_spm_req_o (spm_req[PORT_RX0]),   .rx_spm_rsp_i (spm_rsp[PORT_RX0]),
+    .rmt_req_o(niu_rmt_req), .rmt_we_o(niu_rmt_we), .rmt_addr_o(niu_rmt_addr), .rmt_be_o(niu_rmt_be),
+    .rmt_wdata_o(niu_rmt_wdata), .rmt_rvalid_i(rmt_rvalid), .rmt_err_i(rmt_err), .rmt_rdata_i(rmt_rdata),
+    .doorbell_o(doorbell),
     .inj_o(inj), .inj_credit_i(inj_credit), .ej_i(ej), .ej_credit_o(ej_credit),
     .ev_tx_flit_o(ev_tx), .ev_rx_flit_o(ev_rx), .ev_error_o(ev_err)
   );
@@ -181,37 +188,44 @@ module tile_top
   );
 
   // ----------------------------------------------------------- remote port
-  // Remote accesses from the NIU (write-only) and from the testbench (M1).
+  // Remote accesses from the NIU (RX writes, reply-engine reads) and from the
+  // testbench (M1 scaffolding).
   logic        rmt_req, rmt_we;
   logic [31:0] rmt_addr, rmt_wdata;
+  logic [3:0]  rmt_be;
   assign rmt_req   = niu_rmt_req || tb_req_i;
-  assign rmt_we    = niu_rmt_req ? 1'b1 : tb_we_i;
+  assign rmt_we    = niu_rmt_req ? niu_rmt_we : tb_we_i;
   assign rmt_addr  = niu_rmt_req ? niu_rmt_addr : tb_addr_i;
+  assign rmt_be    = niu_rmt_req ? niu_rmt_be : 4'hF;
   assign rmt_wdata = niu_rmt_req ? niu_rmt_wdata : tb_wdata_i;
 
   reg_req_t rmt_tctrl_req, rmt_perf_req;
   reg_rsp_t rmt_tctrl_rsp, rmt_perf_rsp;
-  logic     rmt_hit_tctrl, rmt_hit_perf, rmt_bad_q, tb_q;
+  logic     rmt_hit_tctrl, rmt_hit_perf, rmt_bad_q, rmt_q, tb_q;
   assign rmt_hit_tctrl = rmt_addr[31:12] == TCTRL_BASE[31:12];
   assign rmt_hit_perf  = rmt_addr[31:12] == PERF_BASE[31:12];
   always_comb begin
-    rmt_tctrl_req       = '{req: rmt_req && rmt_hit_tctrl, we: rmt_we, addr: rmt_addr[11:0], be: 4'hF, wdata: rmt_wdata};
+    rmt_tctrl_req       = '{req: rmt_req && rmt_hit_tctrl, we: rmt_we, addr: rmt_addr[11:0], be: rmt_be, wdata: rmt_wdata};
     rmt_perf_req        = rmt_tctrl_req;
     rmt_perf_req.req    = rmt_req && rmt_hit_perf;
   end
   always_ff @(posedge clk_i or negedge rst_ni)
     if (!rst_ni) begin
       rmt_bad_q <= 1'b0;
+      rmt_q     <= 1'b0;
       tb_q      <= 1'b0;
     end else begin
       rmt_bad_q <= rmt_req && !rmt_hit_tctrl && !rmt_hit_perf;
+      rmt_q     <= rmt_req;
       tb_q      <= tb_req_i && !niu_rmt_req;
     end
+  assign rmt_rvalid = rmt_q;
+  assign rmt_err    = rmt_tctrl_rsp.err || rmt_perf_rsp.err || rmt_bad_q;
+  assign rmt_rdata  = rmt_tctrl_rsp.rdata | rmt_perf_rsp.rdata;
 
-  // Responses go to the testbench only (NIU writes are posted)
   assign tb_rvalid_o = tb_q;
-  assign tb_err_o    = tb_q && (rmt_tctrl_rsp.err || rmt_perf_rsp.err || rmt_bad_q);
-  assign tb_rdata_o  = rmt_tctrl_rsp.rdata | rmt_perf_rsp.rdata;
+  assign tb_err_o    = tb_q && rmt_err;
+  assign tb_rdata_o  = rmt_rdata;
 
 `ifndef SYNTHESIS
   always_ff @(posedge clk_i or negedge rst_ni)
@@ -225,7 +239,7 @@ module tile_top
     .clk_i, .rst_ni, .coord_x_i, .coord_y_i,
     .core_req_i(tctrl_req), .core_rsp_o(tctrl_rsp),
     .rmt_req_i (rmt_tctrl_req),        .rmt_rsp_o (rmt_tctrl_rsp),
-    .doorbell_set_i(1'b0), .run_o(run), .cycle_o(cycle)
+    .doorbell_set_i(doorbell), .run_o(run), .cycle_o(cycle)
   );
 
   logic [EV_NUM-1:0] perf_ev;

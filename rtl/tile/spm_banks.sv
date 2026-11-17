@@ -1,6 +1,11 @@
 // Scratchpad: SPM_BANKS banks of 128 bit, interleaved on address bits [5:4], each
 // with its own arbiter over SPM_PORTS master ports. Every granted request (read or
 // write) gets rvalid exactly one cycle later; read data comes with it.
+//
+// Atomic add: a locked read, then (granted through the lock) a write with `add`,
+// which stores the bank's read register + wdata in the 32-bit lane the byte
+// enables select. The adder sits here, next to the bank output, so the
+// requester never feeds read data back into its own request.
 module spm_banks
   import tile_pkg::*;
 #(
@@ -47,17 +52,25 @@ module spm_banks
       .promoted_o (bank_prom[b])
     );
 
+    logic        add;
+    logic [1:0]  lane;
+    logic [31:0] sum;
     always_comb begin
       en = |bank_gnt[b];
-      we = 1'b0; row = '0; be = '0; wdata = '0;
+      we = 1'b0; row = '0; be = '0; wdata = '0; add = 1'b0;
       for (int p = 0; p < SPM_PORTS; p++) begin
         if (bank_gnt[b][p]) begin
           we    = req_i[p].we;
+          add   = req_i[p].add;
           row   = spm_row_of(req_i[p].addr);
           be    = req_i[p].be;
           wdata = req_i[p].wdata;
         end
       end
+      lane = '0;
+      for (int l = 0; l < 4; l++) if (be[4*l]) lane = 2'(l);
+      sum = bank_rdata[b][32*lane +: 32] + wdata[32*lane +: 32];
+      if (add) wdata = {4{sum}};
     end
 
     spm_bank #(.ROWS(SPM_ROWS)) u_bank (
@@ -91,6 +104,21 @@ module spm_banks
         if (gnt[p]) bank_q[p] <= spm_bank_of(req_i[p].addr);
     end
   end
+
+`ifndef SYNTHESIS
+  // An add must be the write half of this port's locked read on the same bank
+  logic [SPM_PORTS-1:0] locked_q;
+  always_ff @(posedge clk_i or negedge rst_ni)
+    if (!rst_ni) locked_q <= '0;
+    else
+      for (int p = 0; p < SPM_PORTS; p++) begin
+        locked_q[p] <= gnt[p] && req_i[p].lock && !req_i[p].we;
+        if (gnt[p] && req_i[p].add)
+          assert (req_i[p].we && locked_q[p] && bank_q[p] == spm_bank_of(req_i[p].addr) &&
+                  $onehot({req_i[p].be[12], req_i[p].be[8], req_i[p].be[4], req_i[p].be[0]}))
+            else $error("spm_banks: port %0d add without its locked read on the same bank", p);
+      end
+`endif
 
   always_comb
     for (int p = 0; p < SPM_PORTS; p++) begin

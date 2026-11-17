@@ -227,7 +227,7 @@ NIU registers, per DMA channel (start with 2 channels; channel n starts at 0x100
 | `0x04` | `DST_ADDR` | Remote local address, 16-byte aligned (word-aligned for ATOMIC\_INC) |
 | `0x08` | `DST_XY` | Remote tile, x in `[7:0]`, y in `[15:8]`; only the low 4 bits of each field reach the flit, the upper bits must be zero |
 | `0x0C` | `LEN` | Bytes, multiple of 16 |
-| `0x10` | `CMD` | Write starts: op (WRITE, READ\_REQ, ATOMIC\_INC), plane (AUTO, or forced NoC0/NoC1 for tests only), arg |
+| `0x10` | `CMD` | Write starts: op `[2:0]` (WRITE, READ\_REQ, ATOMIC\_INC), plane `[4:3]` (AUTO, or forced NoC0/NoC1 for tests only), doorbell `[5]` and increment `[31:16]` for ATOMIC\_INC. READ\_REQ reads `LEN` bytes from `DST_ADDR` at `DST_XY` into `SRC`; ATOMIC\_INC ignores `SRC` and `LEN` |
 | `0x14` | `STATUS` | Busy bit, completed-command counter, error bit (misaligned, coordinate outside the grid or at a router-only stop, nonzero upper bits, READ\_REQ on channel 1) |
 
 DMA moves whole flits: every DMA flit has all 16 byte enables set. Sub-16-byte writes come only from the I/O bridge (AXI byte strobes). A command with an error does not start; it sets the error bit and counts as completed so `dma_wait` cannot hang.
@@ -236,9 +236,9 @@ Tile control registers: `COORD` (read-only own x, y), `GRID` (read-only: compute
 
 Counter bank: ten 48-bit counters that count only while `CTRL.run` is set. Counters 0 and 1 are fixed (cycles, retired instructions); counters 2 to 9 each count the event named by their select register at `+0x400 + 4k`, any of the tile's events (stalls, arbiter denials and promotions per port, NIU flits and errors, router flits, credit stalls, arbitration losses and bubble-rule holds per port). After reset the selects pick fetch stalls, data stalls, NIU flits sent, received and dropped, and the router's three output flit counts. Counter *i* is at `+8i` (live; reading the low word latches the high word, so low-then-high is one consistent value) and at `+0x800 + 8i` (snapshot). `+0xFF0` returns the number of counters, `+0xFF8` the number of events. `PERF_CMD` (`+0xFF4`, write-only) bit 0 copies every counter into the snapshot view in the same cycle, and bit 1 clears every live counter. Both bits in one write capture the totals and restart from zero. Selects and `PERF_CMD` are writable from the local core and remotely; the counters themselves are read-only. Collecting more than eight events per kernel takes several runs or a rotating selection; that is the price of a bank about a quarter the size of one counter per event.
 
-Semaphores are plain 32-bit words in the scratchpad. ATOMIC\_INC is executed by the receiving NIU as a read-modify-write, so no core is involved and no lock is needed. Atomics from both RX ports go through one atomic unit in the NIU, so increments arriving on both planes to the same word in the same cycle are serialized, and the bank lock keeps other masters out during the read-modify-write. Software contract: the core does not write a semaphore word while remote tiles may increment it (resetting it is fine once all increments for the round have landed).
+Semaphores are plain 32-bit words in the scratchpad. ATOMIC\_INC is executed by the receiving NIU as a read-modify-write, so no core is involved and no lock is needed: a locked read, then a write with the bank's `add` flag, which stores the bank's read register plus the increment (the adder sits next to the bank, so the NIU never feeds read data back into its own request). Atomics from both RX ports go through one atomic unit in the NIU, so increments arriving on both planes to the same word in the same cycle are serialized, and the bank lock keeps other masters out during the read-modify-write. Software contract: the core does not write a semaphore word while remote tiles may increment it (resetting it is fine once all increments for the round have landed).
 
-Incoming NoC traffic is decoded by local address: the scratchpad range goes to the bank arbiter, tile control and the counter bank accept remote accesses (so the host can start cores and read counters), and the NIU registers are reachable only from the tile's own core.
+Incoming NoC traffic is decoded by local address: the scratchpad range goes to the bank arbiter, tile control and the counter bank accept remote accesses (so the host can start cores and read counters), and the NIU registers are reachable only from the tile's own core. A remote register write writes every 32-bit lane of the flit with any byte enable set, lowest first; the reply engine's register reads yield to RX writes on the shared remote port.
 
 ### NIU structure
 
@@ -283,7 +283,7 @@ Plane selection is a fixed function of (source, destination), never of load. Wit
 | --- | --- | --- |
 | `dst_x`, `dst_y` | 4 + 4 | Destination tile (up to 16x16) |
 | `src_x`, `src_y` | 4 + 4 | Source tile, used for replies and debug |
-| `op` | 3 | WRITE, READ\_REQ, ATOMIC\_INC; MULTICAST from M4; remaining codes reserved (for example remote load/store) |
+| `op` | 3 | WRITE, READ\_REQ, ATOMIC\_INC, READ\_RSP; MULTICAST from M4; remaining codes reserved (for example remote load/store) |
 | `vc` | 1 | Reserved: kept for a dateline-VC fallback, unused with bubble flow control |
 | `addr` | 32 | Local address at the destination |
 | `be` | 16 | Byte enables for the 16-byte payload |
@@ -293,8 +293,9 @@ Plane selection is a fixed function of (source, destination), never of load. Wit
 204 bits per link and plane (8 + 8 + 3 + 1 + 32 + 16 + 8 + 128). Coordinates are 4 bits, so the router grid, including the I/O row and buffer columns, is capped at 16x16; 8x8 with both options is 10x9. Op semantics:
 
 - WRITE: write `data` under `be` at `addr`. Posted, no response.
-- READ\_REQ: `data[31:0]` holds the return address at the requester, `data[63:32]` the length in bytes (multiple of 16); the reply goes to (`src_x`, `src_y`). The destination NIU answers with `len / 16` WRITE flits carrying the request's `tag`, so reads are just writes in the other direction. The source range may be the scratchpad, tile control or the counter bank, never the NIU registers.
-- ATOMIC\_INC: add `data[31:0]` to the word at `addr`, optionally ring the doorbell.
+- READ\_REQ: `data[31:0]` holds the return address at the requester, `data[63:32]` the length in bytes (multiple of 16); the reply goes to (`src_x`, `src_y`). The destination NIU answers with `len / 16` READ\_RSP flits carrying the request's `tag`, so reads are just writes in the other direction. The source range may be the scratchpad, tile control or the counter bank (read as four 32-bit registers per flit, in address order), never the NIU registers; any other source is answered with zeros and counted as an NIU error, so the requester never hangs.
+- ATOMIC\_INC: add `data[31:0]` to the word at `addr` (word-aligned, scratchpad only); `data[32]` also rings the target's doorbell.
+- READ\_RSP (code 4): a reply flit. It writes like WRITE, and the requester counts it towards its outstanding read; a READ\_RSP that no read is waiting for (or with another tag) is dropped as an error. A separate code keeps replies apart from ordinary DMA writes that carry the same kind of tag.
 
 ### Ordering and completion
 
@@ -527,11 +528,11 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 - [ ] `CTRL.run` over the NoC → host releases a core remotely
 - [ ] ELF loading through the I/O tile → backdoor removed, hello-world runs
 - [ ] Mailbox and `set_args` → kernel reads its arguments
-- [ ] READ\_REQ in the NIU, TX-reply engine on its own arbiter port, tag-based completion → remote read returns correct data, and served at full rate while the tile's own DMA streams on the other plane
-- [ ] READ\_REQ queue sizing assertion → elaboration fails when the queue is too shallow for the grid
-- [ ] READ\_REQ storm (every node at its limit, one target, target injection blocked) → no queue overflow, RX never stalls, watchdog silent
-- [ ] `noc_fence` → writes before the fence are visible at the destination when it returns
-- [ ] ATOMIC\_INC and semaphores → all tiles increment one counter, final value exact
+- [x] READ\_REQ in the NIU, TX-reply engine on its own arbiter port, tag-based completion → remote read returns correct data, and served at full rate while the tile's own DMA streams on the other plane (one plane until M3: replies alone at 1 flit/cycle, shared 0.5/0.5 with DMA)
+- [x] READ\_REQ queue sizing assertion → elaboration fails when the queue is too shallow for the grid
+- [x] READ\_REQ storm (every node at its limit, one target, target injection blocked) → no queue overflow, RX never stalls, watchdog silent (NIU unit test: a full queue plus 40 writes retire at one flit per cycle with injection blocked)
+- [x] `noc_fence` → writes before the fence are visible at the destination when it returns
+- [x] ATOMIC\_INC and semaphores → all tiles increment one counter, final value exact
 - [ ] DONE counter + `dev.wait` → host waits for all tiles
 - [ ] `libtorus` v0 (`Device`, `load_kernel`, `launch`, `wait`) → example program runs
 - [ ] Counter readout over the NoC → `dev.read_counters` returns all banks

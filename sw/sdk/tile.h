@@ -1,6 +1,5 @@
-// Kernel SDK for compute tiles (SPEC.md, Software stack).
-// M0: coordinates, cycle counter, performance counters, console and exit.
-// The NoC calls (DMA, semaphores) are declared now and arrive with the NIU in M1/M2.
+// Kernel SDK for compute tiles (SPEC.md, Software stack): coordinates, cycle
+// counter, performance counters, console and exit, DMA, semaphores, fences.
 #pragma once
 #include <stdint.h>
 
@@ -157,14 +156,30 @@ void tile_exit(int code) __attribute__((noreturn));
 
 static inline uint32_t niu_status(int ch) { return mmio_read(NIU_CH(ch) + NIU_STATUS); }
 
-// M1: dma_write and dma_wait. The rest arrives with the NIU features in M2/M3.
-// dma_write: src, dst_addr and len multiples of 16; returns at once, the
-// channel stays busy until every flit has been injected.
+#define NIU_CMD_DOORBELL (1u << 5)              // ATOMIC_INC: also ring the target's doorbell
+#define NIU_CMD_ARG(n)   ((uint32_t)(n) << 16)    // ATOMIC_INC: the increment
+
+// DMA (SPEC.md, Ordering and completion). Addresses and lengths are multiples
+// of 16; every call returns at once and the channel stays busy until done.
+// dma_write: done when every flit has been injected (not delivered).
 void dma_write(int ch, uint32_t src, xy_t dst, uint32_t dst_addr, uint32_t len);
-void dma_read(xy_t src, uint32_t src_addr, uint32_t dst, uint32_t len);  // channel 0
-void dma_wait(int ch);   // until the channel's command has finished (writes: injected)
+// dma_read (channel 0): len bytes from src_addr at tile src into the local
+// scratchpad at dst; done when every reply flit has landed here. The source may
+// be the scratchpad, tile control or the counter bank of any compute tile.
+void dma_read(xy_t src, uint32_t src_addr, uint32_t dst, uint32_t len);
+void dma_wait(int ch);   // until the channel's command has finished
+// Semaphores: 32-bit words in the scratchpad. sem_inc adds n (< 65536) at
+// dst through channel 1 (waits for it to be idle) and returns once the
+// increment is injected; sem_inc_doorbell also sets the target's DOORBELL.
 void sem_inc(xy_t dst, uint32_t sem_addr, uint32_t n);
-void sem_wait(volatile uint32_t *sem, uint32_t value);
+void sem_inc_doorbell(xy_t dst, uint32_t sem_addr, uint32_t n);
+// Wait until *sem has reached value (modulo 2^32, so counters may wrap)
+static inline void sem_wait(volatile uint32_t *sem, uint32_t value) {
+  while ((int32_t)(*sem - value) < 0) {
+  }
+}
+// Every earlier write from this tile to dst is visible at dst when this returns
+// (a 16-byte READ_REQ round trip on channel 0). Not for the I/O tile.
 void noc_fence(xy_t dst);
 xy_t neighbor(int dx, int dy);
 

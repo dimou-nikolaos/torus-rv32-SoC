@@ -32,7 +32,7 @@ void set_bits(uint32_t* w, int lsb, int width, uint64_t v) {
 }
 
 struct Req {
-  bool valid = false, we = false, lock = false;
+  bool valid = false, we = false, lock = false, add = false;
   uint32_t addr = 0;
   uint16_t be = 0;
   uint8_t data[16] = {};
@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
   bool exp_is_read[kSpmPorts] = {};
 
   std::set<uint32_t> seen_masks[kSpmBanks];
-  uint64_t grants = 0, promotions = 0, conflicts = 0, reads_checked = 0;
+  uint64_t grants = 0, promotions = 0, conflicts = 0, reads_checked = 0, adds = 0;
   int max_wait = 0;
   uint64_t t = 0;
 
@@ -96,10 +96,12 @@ int main(int argc, char** argv) {
   int hot_bank = 0;
   auto new_request = [&](int p) {
     Req& r = port[p];
-    if (r.rmw_pending) {  // write half of the atomic, same word
+    r.add = false;
+    if (r.rmw_pending) {  // write half of the atomic, same word: plain write or add
       r.valid = true;
       r.we = true;
       r.lock = false;
+      r.add = rng() & 1;
       r.be = (uint16_t)(0xF << (4 * ((r.addr >> 2) & 3)));
       for (auto& b : r.data) b = (uint8_t)rng();
       r.rmw_pending = false;
@@ -159,12 +161,13 @@ int main(int argc, char** argv) {
     }
 
     // Drive requests
-    uint32_t req = 0, we = 0, lock = 0;
+    uint32_t req = 0, we = 0, lock = 0, add = 0;
     for (int p = 0; p < kSpmPorts; p++) {
       const Req& r = port[p];
       if (r.valid) req |= 1u << p;
       if (r.we) we |= 1u << p;
       if (r.lock) lock |= 1u << p;
+      if (r.add) add |= 1u << p;
       set_bits(dut->addr_i.data(), p * 16, 16, r.addr);
       set_bits(dut->be_i.data(), p * 16, 16, r.be);
       for (int b = 0; b < 16; b++) set_bits(dut->wdata_i.data(), p * 128 + b * 8, 8, r.data[b]);
@@ -172,6 +175,7 @@ int main(int argc, char** argv) {
     dut->req_i = req;
     dut->we_i = we;
     dut->lock_i = lock;
+    dut->add_i = add;
     tick(0);
 
     // Model grants per bank
@@ -204,7 +208,18 @@ int main(int argc, char** argv) {
       exp_valid[p] = gnt >> p & 1;
       exp_is_read[p] = exp_valid[p] && !port[p].we;
       if (!exp_valid[p]) continue;
-      if (port[p].we) mem.write128(port[p].addr, port[p].data, port[p].be);
+      if (port[p].we && port[p].add) {  // read word + increment, in the selected lane
+        uint8_t cur[16], upd[16];
+        mem.read128(port[p].addr, cur);
+        int lane = (port[p].addr >> 2) & 3;
+        uint32_t old, inc;
+        memcpy(&old, &cur[4 * lane], 4);
+        memcpy(&inc, &port[p].data[4 * lane], 4);
+        old += inc;
+        for (int l = 0; l < 4; l++) memcpy(&upd[4 * l], &old, 4);
+        mem.write128(port[p].addr, upd, port[p].be);
+        adds++;
+      } else if (port[p].we) mem.write128(port[p].addr, port[p].data, port[p].be);
       else mem.read128(port[p].addr, exp_data[p]);
     }
     grants += __builtin_popcount(gnt);
@@ -235,9 +250,9 @@ int main(int argc, char** argv) {
 
   if (tfp) tfp->close();
   dut->final();
-  printf("tb_spm: PASS cycles=%llu grants=%llu reads_checked=%llu conflicts=%llu "
+  printf("tb_spm: PASS cycles=%llu grants=%llu adds=%llu reads_checked=%llu conflicts=%llu "
          "promotions=%llu max_wait=%d bound=%d\n",
-         (unsigned long long)t, (unsigned long long)grants, (unsigned long long)reads_checked,
+         (unsigned long long)t, (unsigned long long)grants, (unsigned long long)adds, (unsigned long long)reads_checked,
          (unsigned long long)conflicts, (unsigned long long)promotions, max_wait, arb[0].bound());
   return 0;
 }

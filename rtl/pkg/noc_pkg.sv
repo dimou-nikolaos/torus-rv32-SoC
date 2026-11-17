@@ -13,7 +13,8 @@ package noc_pkg;
     OP_WRITE      = 3'd0,
     OP_READ_REQ   = 3'd1,
     OP_ATOMIC_INC = 3'd2,
-    OP_MULTICAST  = 3'd3   // reserved for M4
+    OP_MULTICAST  = 3'd3,  // reserved for M4
+    OP_READ_RSP   = 3'd4   // a WRITE that answers a READ_REQ (counted by the requester)
   } op_e;
 
   // 204 bits, MSB first in the order of SPEC.md

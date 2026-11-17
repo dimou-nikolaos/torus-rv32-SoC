@@ -47,7 +47,7 @@ def discover(args):
     tests.append(Test("unit.flit", [str(BUILD / "tb/unit/tb_flit")]))
     for cfg in ("s0_d4", "s1_d6", "s2_d8", "s0_d3", "s2_d7"):
         tests.append(Test(f"unit.link.{cfg}", [str(BUILD / f"tb/unit/tb_link_{cfg}")]))
-    for i in range(2):
+    for i in range(3):
         tests.append(Test(f"unit.niu.{i}", [str(BUILD / "tb/unit/tb_niu")]))
     for d in (0, 1):
         for sl in (0, 1, 2):
@@ -66,14 +66,20 @@ def discover(args):
     tests.append(Test("lint.router_too_shallow", lint + [
         "--top-module", "noc_router", "-GLINK_SLICE=1", "-GDEPTH=6",
         "-f", "rtl/noc/noc.f"], seeded=False, expect_fail=True))
+    # Elaboration must reject a READ_REQ queue below the grid's READ_REQs in flight
+    tests.append(Test("lint.niu_rq_too_shallow", lint + [
+        "--top-module", "niu", "-GRQ_NEEDED=24", "-GRQ_DEPTH=23", "-f", "rtl/tile/niu.f"],
+        seeded=False, expect_fail=True))
     tb = str(BUILD / "tb/soc/tb_soc_1x1")
     tests.append(Test("tile.hello", [tb, str(BUILD / "sw/hello.elf")]))
     tests.append(Test("tile.regtest", [tb, str(BUILD / "sw/regtest.elf")]))
     tests.append(Test("tile.dmatest", [tb, str(BUILD / "sw/dmatest.elf")]))
+    tests.append(Test("tile.nocops", [tb, str(BUILD / "sw/nocops.elf")]))
     soc22 = str(BUILD / "tb/soc/tb_soc_2x2")
     tests.append(Test("soc2x2.pingpong", [soc22, str(BUILD / "sw/pingpong.elf")]))
     tests.append(Test("soc2x2.dmatest", [soc22, str(BUILD / "sw/dmatest.elf")]))
     tests.append(Test("soc2x2.hello", [soc22, str(BUILD / "sw/hello.elf")]))
+    tests.append(Test("soc2x2.nocops", [soc22, str(BUILD / "sw/nocops.elf")]))
     for elf in sorted((BUILD / "sw/isa").glob("*.elf")):
         tests.append(Test(f"isa.{elf.stem}", [tb, str(elf)]))
     if args.synth:

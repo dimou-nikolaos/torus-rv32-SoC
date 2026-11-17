@@ -55,11 +55,14 @@ package tile_pkg;
 
   // Scratchpad master port. OBI-like: a request is held until granted; read
   // data returns exactly one cycle after the grant. `lock` on a granted request
-  // reserves the bank for the same port in the next cycle (atomic RMW).
+  // reserves the bank for the same port in the next cycle (atomic RMW); that
+  // next request may be a write with `add`, which stores read data + wdata in
+  // the one 32-bit lane its byte enables select.
   typedef struct packed {
     logic                  req;
     logic                  we;
     logic                  lock;
+    logic                  add;
     logic [SPM_AW-1:0]     addr;   // byte address; [3:0] ignored
     logic [15:0]           be;
     logic [127:0]          wdata;

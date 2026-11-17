@@ -1,19 +1,38 @@
-// Network interface unit, M1 subset (SPEC.md, NIU structure; Tile memory map).
+// Network interface unit (SPEC.md, NIU structure; Tile memory map; NoC packet
+// format). One plane (NoC0) until M3.
 //
 // TX-DMA: two channels, each programmed through SRC, DST_ADDR, DST_XY, LEN and
-// started by writing CMD. A WRITE command reads the scratchpad from SRC in 16-byte
-// words (arbiter port TX-DMA) and injects one WRITE flit per word to DST_XY at
-// DST_ADDR, DST_ADDR + 16, ... Channels interleave flit by flit; each channel's
-// flits leave in address order. A command completes when its last flit has been
-// injected (SPEC.md, Ordering and completion, rule 4).
+// started by writing CMD = {arg[31:16], doorbell[5], plane[4:3], op[2:0]}.
+//   WRITE       reads the scratchpad from SRC in 16-byte words (arbiter port
+//               TX-DMA) and injects one WRITE flit per word to DST_XY at
+//               DST_ADDR, DST_ADDR + 16, ...; done when the last flit is injected.
+//   READ_REQ    channel 0 only: one READ_REQ flit asking DST_XY for LEN bytes
+//               from DST_ADDR, returned to SRC here; done when every READ_RSP
+//               flit has been written into the scratchpad.
+//   ATOMIC_INC  one flit adding arg to the word at DST_ADDR at DST_XY (and
+//               ringing its doorbell if bit 5 is set); done when injected.
+// Channels interleave flit by flit; each channel's flits leave in address order.
 //
-// RX: flits leave the ejection buffer strictly in arrival order. A WRITE to the
-// scratchpad goes to arbiter port RX0 and is retired when granted; a WRITE to
-// tile control or the counter bank goes to the remote register port.
+// RX: flits leave the ejection buffer strictly in arrival order:
+//   WRITE, READ_RSP  scratchpad (arbiter port RX0, retired when granted), or
+//                    tile control / counter bank (one register write per 32-bit
+//                    lane with byte enables set); READ_RSP also counts towards
+//                    channel 0's read
+//   READ_REQ         into the READ_REQ queue, retired at once (never full: the
+//                    depth covers every READ_REQ the grid can have in flight)
+//   ATOMIC_INC       read-modify-write on the scratchpad, bank locked for its
+//                    two cycles
+// Anything else is dropped and counted as an error.
 //
-// Not yet (M2): READ_REQ with its reply engine and queue, ATOMIC_INC, NoC1.
-// Commands that need them complete at once with STATUS.error set; such flits
-// arriving at RX are dropped and counted as errors.
+// TX-reply: serves the READ_REQ queue in order, each request in address order:
+// reads the scratchpad (arbiter port TX-reply) or tile control and the counter
+// bank (four 32-bit reads per flit on the remote register port, which RX
+// writes take first) and sends len/16 READ_RSP flits back. A source outside
+// those ranges is answered with zeros and counted as an error, so the
+// requester never hangs.
+//
+// Injection: TX-DMA and TX-reply each have a staging FIFO; the injection mux
+// serves them round-robin, one flit per cycle.
 module niu
   import tile_pkg::*;
   import noc_pkg::*;
@@ -22,7 +41,9 @@ module niu
   parameter int unsigned GY         = 2,
   parameter bit          IO_ROW     = 1'b0,  // row GY-1 is the I/O row: only (0, GY-1) has an NIU
   parameter int unsigned DEPTH      = 5,   // router input buffers, and this ejection buffer
-  parameter int unsigned STAGE      = 4    // TX staging buffer between scratchpad and injection
+  parameter int unsigned STAGE      = 4,   // TX staging buffers between scratchpad and injection
+  parameter int unsigned RQ_NEEDED  = 4,   // READ_REQs the whole grid can have in flight
+  parameter int unsigned RQ_DEPTH   = RQ_NEEDED
 ) (
   input  logic     clk_i,
   input  logic     rst_ni,
@@ -34,12 +55,20 @@ module niu
   // Scratchpad ports
   output spm_req_t tx_spm_req_o,
   input  spm_rsp_t tx_spm_rsp_i,
+  output spm_req_t rep_spm_req_o,
+  input  spm_rsp_t rep_spm_rsp_i,
   output spm_req_t rx_spm_req_o,
   input  spm_rsp_t rx_spm_rsp_i,
-  // Remote register access (tile control, counter bank)
+  // Remote register port (tile control, counter bank): answers one cycle later
   output logic        rmt_req_o,
+  output logic        rmt_we_o,
   output logic [31:0] rmt_addr_o,
+  output logic [3:0]  rmt_be_o,
   output logic [31:0] rmt_wdata_o,
+  input  logic        rmt_rvalid_i,
+  input  logic        rmt_err_i,
+  input  logic [31:0] rmt_rdata_i,
+  output logic     doorbell_o,
   // NoC0 local port
   output link_t    inj_o,
   input  logic     inj_credit_i,
@@ -50,8 +79,17 @@ module niu
   output logic     ev_rx_flit_o,
   output logic     ev_error_o
 );
+  // Every READ_REQ that can be in flight must fit, or RX could stall on the
+  // queue and ejection would wait on injection (SPEC.md, NIU structure).
+  if (RQ_DEPTH < RQ_NEEDED) begin : g_rq_check
+    $fatal(1, "niu: READ_REQ queue depth %0d is below the %0d READ_REQs the grid can have in flight",
+           RQ_DEPTH, RQ_NEEDED);
+  end
+
   localparam int unsigned NCH = 2;
   localparam int unsigned CW  = $clog2(DEPTH + 1);
+  localparam coord_t      IO_X = '0;
+  localparam coord_t      IO_Y = coord_t'(GY - 1);
 
   // ---------------------------------------------------------------- registers
   typedef struct packed {
@@ -60,12 +98,15 @@ module niu
 
   cfg_t        cfg_q    [NCH];   // as written by software
   cfg_t        act_q    [NCH];   // latched at CMD
+  op_e         op_q     [NCH];
+  logic [16:0] arg_q    [NCH];   // ATOMIC_INC: {doorbell, increment}
   logic        busy_q   [NCH];
   logic        err_q    [NCH];
   logic [15:0] done_q   [NCH];
-  logic [12:0] rd_left_q [NCH];  // flits still to read from the scratchpad (64 KB = 4096)
-  logic [12:0] inj_left_q [NCH]; // flits still to inject
+  logic [12:0] rd_left_q [NCH];  // flits still to generate (64 KB = 4096)
   logic [6:0]  seq_q    [NCH];
+  logic [12:0] rsp_left_q;       // channel 0: READ_RSP flits still to come
+  logic [7:0]  rsp_tag_q;        // ... and the tag they carry
 
   logic       reg_ch;
   logic [4:0] reg_off;
@@ -75,19 +116,30 @@ module niu
   assign reg_ok = reg_req_i.addr[11:6] == '0 && reg_req_i.addr[1:0] == 2'b00;
 
   // Command checks (SPEC.md: STATUS error bit)
-  function automatic logic cmd_error(int unsigned ch, logic [4:0] cmd, cfg_t c, logic busy);
+  function automatic logic xy_error(logic [31:0] xy);
+    if (xy[31:16] != '0 || xy[15:8] >= 8'(GY) || xy[7:0] >= 8'(GX)) return 1'b1;
+    if (IO_ROW && xy[15:8] == 8'(IO_Y) && xy[7:0] != 8'(IO_X)) return 1'b1;  // router-only stop
+    return 1'b0;
+  endfunction
+
+  function automatic logic cmd_error(logic ch, logic [4:0] cmd, cfg_t c, logic busy);
     logic [2:0] op;
     logic [1:0] plane;
     op    = cmd[2:0];
     plane = cmd[4:3];
-    if (busy) return 1'b1;
-    if (op != OP_WRITE) return 1'b1;                     // READ_REQ, ATOMIC_INC: M2
+    if (busy || xy_error(c.dst_xy)) return 1'b1;
     if (plane == 2'd2 || plane == 2'd3) return 1'b1;     // NoC1: M3
-    if (c.src[3:0] != '0 || c.dst_addr[3:0] != '0 || c.len[3:0] != '0) return 1'b1;
-    if (c.len > SPM_BYTES || c.src > SPM_BYTES - c.len) return 1'b1;
-    if (c.dst_xy[31:16] != '0 || c.dst_xy[15:8] >= 8'(GY) || c.dst_xy[7:0] >= 8'(GX)) return 1'b1;
-    if (IO_ROW && c.dst_xy[15:8] == 8'(GY - 1) && c.dst_xy[7:0] != '0) return 1'b1;  // router-only stop
-    return ch > NCH;  // never
+    unique case (op)
+      OP_WRITE, OP_READ_REQ: begin
+        if (op == OP_READ_REQ && ch != 1'b0) return 1'b1;  // one read channel per tile
+        if (op == OP_READ_REQ && IO_ROW && c.dst_xy[15:8] == 8'(IO_Y)) return 1'b1;  // the I/O tile serves no reads
+        if (c.src[3:0] != '0 || c.dst_addr[3:0] != '0 || c.len[3:0] != '0) return 1'b1;
+        if (c.len > SPM_BYTES || c.src > SPM_BYTES - c.len) return 1'b1;
+        return 1'b0;
+      end
+      OP_ATOMIC_INC: return c.dst_addr[1:0] != '0;
+      default: return 1'b1;
+    endcase
   endfunction
 
   logic [31:0] reg_rdata;
@@ -105,21 +157,19 @@ module niu
   reg_rsp_stage u_rsp (.clk_i, .rst_ni, .req_i(reg_req_i.req), .err_i(!reg_ok || reg_off > 5'h14),
                        .rdata_i(reg_rdata), .rsp_o(reg_rsp_o));
 
-  // ------------------------------------------------- TX: scratchpad reads
-  // Requests one word per cycle from the selected channel while the staging
-  // buffer has room for it; read data arrives one cycle after the grant.
+  // ------------------------------------------------- TX-DMA: flit generation
+  // One flit per cycle from the selected channel while its staging buffer has
+  // room. WRITE flits read the scratchpad (data one cycle after the grant);
+  // READ_REQ and ATOMIC_INC flits carry their data from the registers.
   typedef struct packed {
     logic       ch;
-    logic       last;
+    logic       fin;    // the flit that completes its command when injected
     flit_t      flit;
   } stage_t;
 
-  logic        st_full_room;
   logic [$clog2(STAGE):0] st_count;
-  logic        rd_inflight_q;
-  logic        rd_ch;            // channel chosen this cycle
-  logic        rd_any;
-  logic        rr_q;
+  logic        gen_q, gen_own_q;   // a flit was generated last cycle; data from the registers
+  logic        rd_ch, rd_any, rr_q;
 
   always_comb begin
     rd_any = 1'b0;
@@ -130,130 +180,67 @@ module niu
         rd_ch  = 1'((int'(rr_q) + k) % NCH);
       end
   end
-  assign st_full_room = (int'(st_count) + int'(rd_inflight_q)) < int'(STAGE);
+
+  logic st_room, rd_write, gen;
+  assign st_room  = (int'(st_count) + int'(gen_q)) < int'(STAGE);
+  assign rd_write = op_q[rd_ch] == OP_WRITE;
 
   logic [12:0] rd_idx;
-  assign rd_idx = 13'((act_q[rd_ch].len >> 4) - 32'(rd_left_q[rd_ch]));
+  assign rd_idx = rd_write ? 13'((act_q[rd_ch].len >> 4) - 32'(rd_left_q[rd_ch])) : '0;
 
   always_comb begin
     tx_spm_req_o       = '0;
-    tx_spm_req_o.req   = rd_any && st_full_room;
+    tx_spm_req_o.req   = rd_any && st_room && rd_write;
     tx_spm_req_o.we    = 1'b0;
     tx_spm_req_o.addr  = SPM_AW'(act_q[rd_ch].src + {rd_idx, 4'h0});
     tx_spm_req_o.be    = '1;
   end
-  logic rd_gnt;
-  assign rd_gnt = tx_spm_req_o.req && tx_spm_rsp_i.gnt;
+  assign gen = rd_any && st_room && (!rd_write || tx_spm_rsp_i.gnt);
 
-  // Header of the read in flight, completed with the data when it returns
+  // Header (and own data) of the flit generated last cycle
   stage_t pend_q;
   always_ff @(posedge clk_i or negedge rst_ni)
-    if (!rst_ni) rd_inflight_q <= 1'b0;
-    else         rd_inflight_q <= rd_gnt;
+    if (!rst_ni) gen_q <= 1'b0;
+    else         gen_q <= gen;
   always_ff @(posedge clk_i)
-    if (rd_gnt) begin
+    if (gen) begin
+      gen_own_q          <= !rd_write;
       pend_q.ch          <= rd_ch;
-      pend_q.last        <= rd_left_q[rd_ch] == 13'd1;
+      pend_q.fin         <= rd_left_q[rd_ch] == 13'd1 && op_q[rd_ch] != OP_READ_REQ;
       pend_q.flit.dst_x  <= coord_t'(act_q[rd_ch].dst_xy[7:0]);
       pend_q.flit.dst_y  <= coord_t'(act_q[rd_ch].dst_xy[15:8]);
       pend_q.flit.src_x  <= x_i;
       pend_q.flit.src_y  <= y_i;
-      pend_q.flit.op     <= OP_WRITE;
+      pend_q.flit.op     <= op_q[rd_ch];
       pend_q.flit.vc     <= 1'b0;
       pend_q.flit.addr   <= act_q[rd_ch].dst_addr + {15'h0, rd_idx, 4'h0};
-      pend_q.flit.be     <= '1;
       pend_q.flit.tag    <= {rd_ch, seq_q[rd_ch]};
-      pend_q.flit.data   <= '0;
+      unique case (op_q[rd_ch])
+        OP_READ_REQ: begin
+          pend_q.flit.be   <= '1;
+          pend_q.flit.data <= {64'h0, act_q[rd_ch].len, act_q[rd_ch].src};
+        end
+        OP_ATOMIC_INC: begin
+          pend_q.flit.be   <= 16'hF << (4 * act_q[rd_ch].dst_addr[3:2]);
+          pend_q.flit.data <= {95'h0, arg_q[rd_ch][16], 16'h0, arg_q[rd_ch][15:0]};
+        end
+        default: begin
+          pend_q.flit.be   <= '1;
+          pend_q.flit.data <= '0;
+        end
+      endcase
     end
 
   stage_t st_in, st_head;
   logic   st_empty, st_pop;
   always_comb begin
-    st_in           = pend_q;
-    st_in.flit.data = tx_spm_rsp_i.rdata;
+    st_in = pend_q;
+    if (!gen_own_q) st_in.flit.data = tx_spm_rsp_i.rdata;
   end
   noc_fifo #(.DEPTH(STAGE), .T(stage_t)) u_stage (
-    .clk_i, .rst_ni, .push_i(rd_inflight_q), .data_i(st_in), .pop_i(st_pop),
+    .clk_i, .rst_ni, .push_i(gen_q), .data_i(st_in), .pop_i(st_pop),
     .empty_o(st_empty), .head_o(st_head), .count_o(st_count)
   );
-
-  // ----------------------------------------------------------- TX: inject
-  logic [CW-1:0] inj_credits;
-  assign st_pop = !st_empty && inj_credits != '0;
-  credit_counter #(.DEPTH(DEPTH)) u_cc (
-    .clk_i, .rst_ni, .send_i(st_pop), .credit_i(inj_credit_i), .credits_o(inj_credits)
-  );
-  link_t inj_q;
-  always_ff @(posedge clk_i or negedge rst_ni)
-    if (!rst_ni) inj_q.valid <= 1'b0;
-    else         inj_q.valid <= st_pop;
-  always_ff @(posedge clk_i)
-    if (st_pop) begin
-      inj_q.flit    <= st_head.flit;
-      inj_q.la_port <= route(x_i, y_i, st_head.flit.dst_x, st_head.flit.dst_y);
-    end
-  assign inj_o        = inj_q;
-  assign ev_tx_flit_o = st_pop;
-
-  // ------------------------------------------------- channel state machine
-  logic cmd_wr;
-  assign cmd_wr = reg_req_i.req && reg_req_i.we && reg_ok && reg_off == 5'h10;
-
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-      for (int c = 0; c < NCH; c++) begin
-        cfg_q[c]      <= '0;
-        act_q[c]      <= '0;
-        busy_q[c]     <= 1'b0;
-        err_q[c]      <= 1'b0;
-        done_q[c]     <= '0;
-        rd_left_q[c]  <= '0;
-        inj_left_q[c] <= '0;
-        seq_q[c]      <= '0;
-      end
-      rr_q <= 1'b0;
-    end else begin
-      // Configuration writes
-      if (reg_req_i.req && reg_req_i.we && reg_ok)
-        unique case (reg_off)
-          5'h00: cfg_q[reg_ch].src      <= reg_req_i.wdata;
-          5'h04: cfg_q[reg_ch].dst_addr <= reg_req_i.wdata;
-          5'h08: cfg_q[reg_ch].dst_xy   <= reg_req_i.wdata;
-          5'h0C: cfg_q[reg_ch].len      <= reg_req_i.wdata;
-          default: ;
-        endcase
-      // Command start
-      if (cmd_wr) begin
-        if (cmd_error(int'(reg_ch), reg_req_i.wdata[4:0], cfg_q[reg_ch], busy_q[reg_ch])) begin
-          err_q[reg_ch]  <= 1'b1;
-          if (!busy_q[reg_ch]) done_q[reg_ch] <= done_q[reg_ch] + 1'b1;  // never hangs dma_wait
-        end else if (cfg_q[reg_ch].len == '0) begin
-          err_q[reg_ch]  <= 1'b0;
-          done_q[reg_ch] <= done_q[reg_ch] + 1'b1;
-        end else begin
-          err_q[reg_ch]      <= 1'b0;
-          act_q[reg_ch]      <= cfg_q[reg_ch];
-          busy_q[reg_ch]     <= 1'b1;
-          rd_left_q[reg_ch]  <= 13'(cfg_q[reg_ch].len >> 4);
-          inj_left_q[reg_ch] <= 13'(cfg_q[reg_ch].len >> 4);
-        end
-      end
-      // Reads granted
-      if (rd_gnt) begin
-        rd_left_q[rd_ch] <= rd_left_q[rd_ch] - 1'b1;
-        seq_q[rd_ch]     <= seq_q[rd_ch] + 1'b1;
-        rr_q             <= rd_ch;
-      end
-      // Flits injected; the last one completes the command
-      if (st_pop) begin
-        inj_left_q[st_head.ch] <= inj_left_q[st_head.ch] - 1'b1;
-        if (st_head.last) begin
-          busy_q[st_head.ch] <= 1'b0;
-          done_q[st_head.ch] <= done_q[st_head.ch] + 1'b1;
-        end
-      end
-    end
-  end
 
   // ------------------------------------------------------------------ RX
   typedef struct packed { flit_t flit; } ej_t;
@@ -271,36 +258,385 @@ module niu
 
   flit_t rf;
   assign rf = rx_head.flit;
-  logic rx_write, rx_spm, rx_reg;
-  assign rx_write = !rx_empty && rf.op == OP_WRITE;
-  assign rx_spm   = rx_write && rf.addr[31:SPM_AW] == '0;
-  assign rx_reg   = rx_write && (rf.addr[31:12] == TCTRL_BASE[31:12] || rf.addr[31:12] == PERF_BASE[31:12]);
 
+  // Address classes at this tile
+  logic rf_spm, rf_reg;
+  assign rf_spm = rf.addr[31:SPM_AW] == '0;
+  assign rf_reg = rf.addr[31:12] == TCTRL_BASE[31:12] || rf.addr[31:12] == PERF_BASE[31:12];
+
+  // READ_REQ fields: data[31:0] return address, data[63:32] length
+  logic [31:0] rq_ret, rq_len;
+  logic        rq_ok, rq_src_spm, rq_src_reg;
+  assign rq_ret     = rf.data[31:0];
+  assign rq_len     = rf.data[63:32];
+  assign rq_ok      = rq_len != '0 && rq_len[3:0] == '0 && rq_len <= SPM_BYTES && rf.addr[3:0] == '0 &&
+                      rq_ret[31:SPM_AW] == '0 && rq_ret[3:0] == '0;
+  assign rq_src_spm = rf_spm && {1'b0, rf.addr} + {1'b0, rq_len} <= 33'(SPM_BYTES);
+  assign rq_src_reg = rf_reg && 32'(rf.addr[11:0]) + rq_len <= 32'd4096;
+
+  // READ_RSP is expected only while channel 0 waits for it, with its tag
+  logic rsp_ok;
+  assign rsp_ok = rsp_left_q != '0 && rf.tag == rsp_tag_q;
+
+  typedef enum logic [2:0] {
+    RX_SPM_WRITE, RX_REG_WRITE, RX_READ_REQ, RX_ATOMIC, RX_DROP
+  } rx_kind_e;
+  rx_kind_e rx_kind;
   always_comb begin
-    rx_spm_req_o       = '0;
-    rx_spm_req_o.req   = rx_spm;
-    rx_spm_req_o.we    = 1'b1;
-    rx_spm_req_o.addr  = rf.addr[SPM_AW-1:0];
-    rx_spm_req_o.be    = rf.be;
-    rx_spm_req_o.wdata = rf.data;
+    rx_kind = RX_DROP;
+    unique case (rf.op)
+      OP_WRITE:      rx_kind = rf_spm ? RX_SPM_WRITE : rf_reg ? RX_REG_WRITE : RX_DROP;
+      OP_READ_RSP:   rx_kind = (rf_spm && rsp_ok) ? RX_SPM_WRITE : RX_DROP;
+      OP_READ_REQ:   rx_kind = rq_ok ? RX_READ_REQ : RX_DROP;
+      OP_ATOMIC_INC: rx_kind = (rf_spm && rf.addr[1:0] == '0) ? RX_ATOMIC : RX_DROP;
+      default:       rx_kind = RX_DROP;
+    endcase
   end
 
-  // A register write takes the 32-bit lane named by addr[3:2]
-  assign rmt_req_o   = rx_reg;
-  assign rmt_addr_o  = rf.addr;
-  assign rmt_wdata_o = rf.data[32 * rf.addr[3:2] +: 32];
+  // Register writes: one per 32-bit lane with any byte enable set, lowest first
+  logic [3:0] lanes, lanes_done_q, lanes_left;
+  logic [1:0] lane;
+  logic       lane_last;
+  always_comb begin
+    for (int l = 0; l < 4; l++) lanes[l] = |rf.be[4*l +: 4];
+    lanes_left = lanes & ~lanes_done_q;
+    lane = '0;
+    for (int l = 3; l >= 0; l--) if (lanes_left[l]) lane = 2'(l);
+    lane_last = (lanes_left & ~(4'b1 << lane)) == '0;
+  end
+  logic rx_reg_wr;
+  assign rx_reg_wr = !rx_empty && rx_kind == RX_REG_WRITE && lanes_left != '0;
 
-  // Retire in order: scratchpad writes when granted, everything else at once
-  assign rx_pop       = !rx_empty && (!rx_spm || rx_spm_rsp_i.gnt);
+  // Atomic: phase 0 reads with the lock, phase 1 adds (granted by the lock;
+  // the scratchpad adds its read data to the increment)
+  logic atom_q;
+
+  logic rx_spm_req;
+  assign rx_spm_req = !rx_empty && (rx_kind == RX_SPM_WRITE || rx_kind == RX_ATOMIC);
+  always_comb begin
+    rx_spm_req_o       = '0;
+    rx_spm_req_o.req   = rx_spm_req;
+    rx_spm_req_o.addr  = rf.addr[SPM_AW-1:0];
+    if (rx_kind == RX_ATOMIC) begin
+      rx_spm_req_o.we    = atom_q;
+      rx_spm_req_o.lock  = !atom_q;
+      rx_spm_req_o.add   = atom_q;
+      rx_spm_req_o.be    = 16'hF << (4 * rf.addr[3:2]);
+      rx_spm_req_o.wdata = {4{rf.data[31:0]}};
+    end else begin
+      rx_spm_req_o.we    = 1'b1;
+      rx_spm_req_o.be    = rf.be;
+      rx_spm_req_o.wdata = rf.data;
+    end
+  end
+
+  // READ_REQ queue
+  typedef enum logic [1:0] { SRC_SPM, SRC_REG, SRC_BAD } rq_src_e;
+  typedef struct packed {
+    coord_t      src_x, src_y;
+    logic [7:0]  tag;
+    rq_src_e     src;
+    logic [11:0] addr;     // source address [15:4] (registers: 0x1000_xxxx)
+    logic [12:0] flits;    // 1..4096
+    logic [11:0] ret;      // return address [15:4] at the requester
+  } rq_t;
+
+  rq_t  rq_in, rq_head;
+  logic rq_push, rq_pop, rq_empty;
+  logic [$clog2(RQ_DEPTH):0] rq_count;
+  always_comb begin
+    rq_in.src_x = rf.src_x;
+    rq_in.src_y = rf.src_y;
+    rq_in.tag   = rf.tag;
+    rq_in.src   = rq_src_spm ? SRC_SPM : rq_src_reg ? SRC_REG : SRC_BAD;
+    rq_in.addr  = rf.addr[15:4];
+    rq_in.flits = 13'(rq_len >> 4);
+    rq_in.ret   = rq_ret[15:4];
+  end
+  assign rq_push = !rx_empty && rx_kind == RX_READ_REQ;
+  noc_fifo #(.DEPTH(RQ_DEPTH), .T(rq_t)) u_rq (
+    .clk_i, .rst_ni, .push_i(rq_push), .data_i(rq_in), .pop_i(rq_pop),
+    .empty_o(rq_empty), .head_o(rq_head), .count_o(rq_count)
+  );
+
+  // Retire in order, each kind when its target accepted it
+  always_comb begin
+    rx_pop = 1'b0;
+    if (!rx_empty)
+      unique case (rx_kind)
+        RX_SPM_WRITE: rx_pop = rx_spm_rsp_i.gnt;
+        RX_ATOMIC:    rx_pop = atom_q && rx_spm_rsp_i.gnt;
+        RX_REG_WRITE: rx_pop = lanes_left == '0 || lane_last;
+        default:      rx_pop = 1'b1;   // READ_REQ into the queue; drops
+      endcase
+  end
+
+  always_ff @(posedge clk_i or negedge rst_ni)
+    if (!rst_ni) begin
+      atom_q       <= 1'b0;
+      lanes_done_q <= '0;
+    end else begin
+      if (rx_kind == RX_ATOMIC && !rx_empty && rx_spm_rsp_i.gnt) atom_q <= !atom_q;
+      lanes_done_q <= rx_pop ? '0 : rx_reg_wr ? lanes_done_q | (4'b1 << lane) : lanes_done_q;
+    end
+
+  assign doorbell_o   = rx_pop && rx_kind == RX_ATOMIC && rf.data[32];
   assign ev_rx_flit_o = rx_pop;
-  assign ev_error_o   = rx_pop && !rx_spm && !rx_reg;
+
+  logic rsp_retire;
+  assign rsp_retire = rx_pop && rf.op == OP_READ_RSP && rx_kind == RX_SPM_WRITE;
+
+  // ------------------------------------------------------------- TX-reply
+  typedef struct packed { flit_t flit; } rstage_t;
+  logic       rp_active_q;
+  rq_t        rp_q;
+  logic [12:0] rp_left_q;      // flits still to generate
+  logic [15:0] rp_off_q;       // byte offset of the next flit
+  logic       rp_spm_q;        // scratchpad read in flight
+  logic       rp_asm_q;        // register flit being assembled
+  logic [1:0] rp_word_q;       // next register word to read
+  logic [1:0] rp_rword_q;      // word whose answer arrives this cycle
+  logic       rp_rd_q;         // a register read is in flight
+  logic [127:0] rp_buf_q;
+  flit_t      rp_pend_q;
+  logic [$clog2(STAGE):0] rs_count;
+
+  logic rp_room;
+  assign rp_room = (int'(rs_count) + int'(rp_spm_q) + int'(rp_asm_q)) < int'(STAGE);
+
+  // Source of the next flit; a register flit's words 1..3 come after its header
+  // advanced the offset
+  logic [31:0] rp_src_addr, rp_reg_addr;
+  assign rp_src_addr = (rp_q.src == SRC_REG ? 32'h1000_0000 : 32'h0) + {16'h0, rp_q.addr, 4'h0} + 32'(rp_off_q);
+  assign rp_reg_addr = rp_src_addr - (rp_word_q != '0 ? 32'd16 : 32'd0);
+
+  // This cycle's step of the reply engine
+  logic rp_spm_req, rp_spm_gnt, rp_bad_gen, rp_reg_rd, rp_hdr;
+  assign rp_spm_req = rp_active_q && rp_q.src == SRC_SPM && rp_left_q != '0 && rp_room;
+  assign rp_spm_gnt = rp_spm_req && rep_spm_rsp_i.gnt;
+  assign rp_bad_gen = rp_active_q && rp_q.src == SRC_BAD && rp_left_q != '0 && rp_room;
+  // Register reads yield to RX register writes
+  assign rp_reg_rd  = rp_active_q && rp_q.src == SRC_REG && !rx_reg_wr &&
+                      (rp_word_q != '0 || (rp_left_q != '0 && rp_room));
+  assign rp_hdr     = rp_spm_gnt || rp_bad_gen || (rp_reg_rd && rp_word_q == '0);
+
+  always_comb begin
+    rep_spm_req_o      = '0;
+    rep_spm_req_o.req  = rp_spm_req;
+    rep_spm_req_o.addr = SPM_AW'(rp_src_addr);
+    rep_spm_req_o.be   = '1;
+  end
+
+  flit_t rp_hdr_flit;
+  always_comb begin
+    rp_hdr_flit       = '0;
+    rp_hdr_flit.dst_x = rp_q.src_x;
+    rp_hdr_flit.dst_y = rp_q.src_y;
+    rp_hdr_flit.src_x = x_i;
+    rp_hdr_flit.src_y = y_i;
+    rp_hdr_flit.op    = OP_READ_RSP;
+    rp_hdr_flit.addr  = {16'h0, rp_q.ret, 4'h0} + 32'(rp_off_q);
+    rp_hdr_flit.be    = '1;
+    rp_hdr_flit.tag   = rp_q.tag;
+  end
+
+  logic rp_done;
+  assign rp_done = rp_active_q && rp_left_q == '0 && !rp_spm_q && !rp_asm_q;
+  assign rq_pop  = !rp_active_q && !rq_empty;
+
+  always_ff @(posedge clk_i or negedge rst_ni)
+    if (!rst_ni) begin
+      rp_active_q <= 1'b0;
+      rp_spm_q    <= 1'b0;
+      rp_asm_q    <= 1'b0;
+      rp_word_q   <= '0;
+      rp_rd_q     <= 1'b0;
+      rp_left_q   <= '0;
+      rp_off_q    <= '0;
+    end else begin
+      if (rq_pop) begin
+        rp_active_q <= 1'b1;
+        rp_left_q   <= rq_head.flits;
+        rp_off_q    <= '0;
+      end else if (rp_done) begin
+        rp_active_q <= 1'b0;
+      end
+      if (rp_hdr) begin
+        rp_left_q <= rp_left_q - 1'b1;
+        rp_off_q  <= rp_off_q + 16'd16;
+      end
+      rp_spm_q <= rp_spm_gnt;
+      rp_rd_q  <= rp_reg_rd;
+      if (rp_reg_rd) rp_word_q <= rp_word_q + 1'b1;
+      // A flit's last word can arrive in the cycle the next flit's first is read
+      rp_asm_q <= (rp_asm_q && !(rp_rd_q && rp_rword_q == 2'd3)) || (rp_reg_rd && rp_word_q == '0);
+    end
+
+  always_ff @(posedge clk_i) begin
+    if (rq_pop)    rp_q      <= rq_head;
+    if (rp_hdr)    rp_pend_q <= rp_hdr_flit;
+    if (rp_reg_rd) rp_rword_q <= rp_word_q;
+    if (rp_rd_q)   rp_buf_q[32 * rp_rword_q +: 32] <= rmt_err_i ? '0 : rmt_rdata_i;
+  end
+
+  // Staging: scratchpad data one cycle after the grant, registers after the
+  // fourth word, zeros at once
+  rstage_t rs_in, rs_head;
+  logic    rs_push, rs_empty, rs_pop;
+  always_comb begin
+    rs_in.flit = rp_pend_q;
+    rs_push    = 1'b0;
+    if (rp_spm_q) begin
+      rs_push         = 1'b1;
+      rs_in.flit.data = rep_spm_rsp_i.rdata;
+    end else if (rp_rd_q && rp_rword_q == 2'd3) begin
+      rs_push         = 1'b1;
+      rs_in.flit.data = {rmt_err_i ? 32'h0 : rmt_rdata_i, rp_buf_q[95:0]};
+    end else if (rp_bad_gen) begin
+      rs_push         = 1'b1;
+      rs_in.flit      = rp_hdr_flit;
+      rs_in.flit.data = '0;
+    end
+  end
+  noc_fifo #(.DEPTH(STAGE), .T(rstage_t)) u_rstage (
+    .clk_i, .rst_ni, .push_i(rs_push), .data_i(rs_in), .pop_i(rs_pop),
+    .empty_o(rs_empty), .head_o(rs_head), .count_o(rs_count)
+  );
+
+  // Remote register port: RX writes, else reply-engine reads
+  assign rmt_req_o   = rx_reg_wr || rp_reg_rd;
+  assign rmt_we_o    = rx_reg_wr;
+  assign rmt_addr_o  = rx_reg_wr ? {rf.addr[31:4], lane, 2'b00} : {rp_reg_addr[31:4], rp_word_q, 2'b00};
+  assign rmt_be_o    = rx_reg_wr ? rf.be[4 * lane +: 4] : 4'hF;
+  assign rmt_wdata_o = rf.data[32 * lane +: 32];
+
+  // Errors: dropped flits, and READ_REQs answered with zeros
+  assign ev_error_o = rx_pop && (rx_kind == RX_DROP || (rx_kind == RX_READ_REQ && rq_in.src == SRC_BAD));
+
+  // -------------------------------------------------------- injection mux
+  logic [CW-1:0] inj_credits;
+  logic          inj_rr_q, pick_rep;
+  always_comb begin
+    pick_rep = 1'b0;
+    if (!rs_empty && (st_empty || inj_rr_q == 1'b0)) pick_rep = 1'b1;
+  end
+  logic inj_send;
+  assign inj_send = (!st_empty || !rs_empty) && inj_credits != '0;
+  assign st_pop   = inj_send && !pick_rep;
+  assign rs_pop   = inj_send && pick_rep;
+
+  credit_counter #(.DEPTH(DEPTH)) u_cc (
+    .clk_i, .rst_ni, .send_i(inj_send), .credit_i(inj_credit_i), .credits_o(inj_credits)
+  );
+  flit_t inj_flit;
+  assign inj_flit = pick_rep ? rs_head.flit : st_head.flit;
+  link_t inj_q;
+  always_ff @(posedge clk_i or negedge rst_ni)
+    if (!rst_ni) begin
+      inj_q.valid <= 1'b0;
+      inj_rr_q    <= 1'b0;
+    end else begin
+      inj_q.valid <= inj_send;
+      if (inj_send) inj_rr_q <= pick_rep;
+    end
+  always_ff @(posedge clk_i)
+    if (inj_send) begin
+      inj_q.flit    <= inj_flit;
+      inj_q.la_port <= route(x_i, y_i, inj_flit.dst_x, inj_flit.dst_y);
+    end
+  assign inj_o        = inj_q;
+  assign ev_tx_flit_o = inj_send;
+
+  // ------------------------------------------------- channel state machine
+  logic cmd_wr;
+  assign cmd_wr = reg_req_i.req && reg_req_i.we && reg_ok && reg_off == 5'h10;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      for (int c = 0; c < NCH; c++) begin
+        cfg_q[c]      <= '0;
+        act_q[c]      <= '0;
+        op_q[c]       <= OP_WRITE;
+        arg_q[c]      <= '0;
+        busy_q[c]     <= 1'b0;
+        err_q[c]      <= 1'b0;
+        done_q[c]     <= '0;
+        rd_left_q[c]  <= '0;
+        seq_q[c]      <= '0;
+      end
+      rsp_left_q <= '0;
+      rsp_tag_q  <= '0;
+      rr_q       <= 1'b0;
+    end else begin
+      // Configuration writes
+      if (reg_req_i.req && reg_req_i.we && reg_ok)
+        unique case (reg_off)
+          5'h00: cfg_q[reg_ch].src      <= reg_req_i.wdata;
+          5'h04: cfg_q[reg_ch].dst_addr <= reg_req_i.wdata;
+          5'h08: cfg_q[reg_ch].dst_xy   <= reg_req_i.wdata;
+          5'h0C: cfg_q[reg_ch].len      <= reg_req_i.wdata;
+          default: ;
+        endcase
+      // Command start
+      if (cmd_wr) begin
+        if (cmd_error(reg_ch, reg_req_i.wdata[4:0], cfg_q[reg_ch], busy_q[reg_ch])) begin
+          err_q[reg_ch]  <= 1'b1;
+          if (!busy_q[reg_ch]) done_q[reg_ch] <= done_q[reg_ch] + 1'b1;  // never hangs dma_wait
+        end else if (reg_req_i.wdata[2:0] != OP_ATOMIC_INC && cfg_q[reg_ch].len == '0) begin
+          err_q[reg_ch]  <= 1'b0;
+          done_q[reg_ch] <= done_q[reg_ch] + 1'b1;
+        end else begin
+          err_q[reg_ch]      <= 1'b0;
+          act_q[reg_ch]      <= cfg_q[reg_ch];
+          op_q[reg_ch]       <= op_e'(reg_req_i.wdata[2:0]);
+          arg_q[reg_ch]      <= {reg_req_i.wdata[5], reg_req_i.wdata[31:16]};
+          busy_q[reg_ch]     <= 1'b1;
+          rd_left_q[reg_ch]  <= reg_req_i.wdata[2:0] == OP_WRITE ? 13'(cfg_q[reg_ch].len >> 4) : 13'd1;
+          if (reg_req_i.wdata[2:0] == OP_READ_REQ) begin
+            rsp_left_q <= 13'(cfg_q[reg_ch].len >> 4);
+            rsp_tag_q  <= {reg_ch, seq_q[reg_ch]};
+          end
+        end
+      end
+      // Flits generated
+      if (gen) begin
+        rd_left_q[rd_ch] <= rd_left_q[rd_ch] - 1'b1;
+        seq_q[rd_ch]     <= seq_q[rd_ch] + 1'b1;
+        rr_q             <= rd_ch;
+      end
+      // WRITE and ATOMIC_INC complete with their last flit injected
+      if (st_pop && st_head.fin) begin
+        busy_q[st_head.ch] <= 1'b0;
+        done_q[st_head.ch] <= done_q[st_head.ch] + 1'b1;
+      end
+      // READ_REQ completes with its last reply flit written
+      if (rsp_retire) begin
+        rsp_left_q <= rsp_left_q - 1'b1;
+        if (rsp_left_q == 13'd1) begin
+          busy_q[0] <= 1'b0;
+          done_q[0] <= done_q[0] + 1'b1;
+        end
+      end
+    end
+  end
+
+`ifndef SYNTHESIS
+  always_ff @(posedge clk_i or negedge rst_ni)
+    if (rst_ni) begin
+      assert (!(rq_push && int'(rq_count) == int'(RQ_DEPTH)))
+        else $error("niu (%0d,%0d): READ_REQ queue overflow", x_i, y_i);
+      assert (!(rx_kind == RX_ATOMIC && !rx_empty && atom_q && !rx_spm_rsp_i.gnt))
+        else $error("niu (%0d,%0d): atomic write lost its bank lock", x_i, y_i);
+      assert (!(rx_reg_wr && rp_reg_rd)) else $error("niu: register port conflict");
+    end
+`endif
 
   /* verilator lint_off UNUSEDSIGNAL */
   logic unused;
-  assign unused = ^{reg_req_i.be, tx_spm_rsp_i.rvalid, rx_spm_rsp_i.rvalid, rx_spm_rsp_i.rdata,
-                    rx_count, ej_i.la_port, inj_left_q[0], inj_left_q[1], rf.src_x, rf.src_y, rf.vc,
-                    rf.tag, rf.dst_x, rf.dst_y, act_q[0].dst_xy[31:16], act_q[1].dst_xy[31:16],
-                    reg_req_i.wdata[31:5]};
+  assign unused = ^{reg_req_i.be, tx_spm_rsp_i.rvalid, rx_spm_rsp_i.rvalid, rx_spm_rsp_i.rdata, rep_spm_rsp_i.rvalid,
+                    rmt_rvalid_i, rx_count, ej_i.la_port, rf.vc, rf.dst_x, rf.dst_y,
+                    act_q[0].dst_xy[31:16], act_q[1].dst_xy[31:16], reg_req_i.wdata[15:6],
+                    rf.data[127:64], rq_ret, rq_len, rp_src_addr[31:16], rp_reg_addr[3:0], rp_buf_q[127:96], rp_q.flits};
   /* verilator lint_on UNUSEDSIGNAL */
 
 endmodule
