@@ -6,10 +6,11 @@ Topology as in SPEC.md (Baseline architecture):
   - the I/O row at y = NY: the I/O tile at (0, NY), router-only stops elsewhere;
   - optional buffer columns at x = NX/2 and x = NX + 1 (router grid NX + 2 wide).
 
-Each ring of length L is folded once and interleaved. The fold starts at a
-rotation r chosen so the I/O row (and the buffer columns) land on die edges:
-physical order r, r-1, r+1, r-2, ... (mod L), which keeps every link,
-wraparound included, at most two tile pitches long. The animation shows the
+Each ring is folded once and interleaved, which keeps every link, wraparound
+included, at most two tile pitches long. In y the I/O row is rotated to the top
+edge and stays there while the compute rows fold onto each other (physical
+order NY, 0, NY-1, 1, ...); in x the whole ring folds, starting from a rotation
+that puts the buffer columns, if any, on the two edges. The animation shows the
 logical grid, the ring rotation, the two folds, the layer slide and the
 stretch to the die.
 
@@ -44,24 +45,35 @@ def ease(k):
 
 
 class Ring:
-    """One dimension: ring of length n, folded starting at rotation r."""
+    """One dimension: ring of length n, rotated so position r comes first.
 
-    def __init__(self, n, r):
-        self.n, self.r = n, r
-        self.c = (n - 1) / 2
+    The first `head` positions after the rotation (the I/O row) stay where they
+    are; the remaining block of n - head positions is folded in half onto
+    itself and interleaved behind them.
+    """
+
+    def __init__(self, n, r, head=0):
+        self.n, self.r, self.head = n, r, head
+        self.m = n - head               # folding block
+        self.c = (self.m - 1) / 2       # fold line inside the block
 
     def k(self, i):
         """Ring position counted from the rotation start."""
         return (i - self.r) % self.n
 
     def folds(self, i):
-        return self.k(i) > self.c
+        k = self.k(i)
+        return k >= self.head and k - self.head > self.c
+
+    def slot(self, i):
+        k = self.k(i)
+        if k < self.head:
+            return k
+        j = k - self.head
+        return self.head + (2 * j if j <= self.c else 2 * (self.m - 1 - j) + 1)
 
     def physical_order(self):
-        slot = {}
-        for i in range(self.n):
-            k = self.k(i)
-            slot[2 * k if k <= self.c else 2 * (self.n - 1 - k) + 1] = i
+        slot = {self.slot(i): i for i in range(self.n)}
         return [slot[s] for s in range(self.n)]
 
     def place(self, i, rot, fold, slide, stretch):
@@ -80,13 +92,16 @@ class Ring:
                     alpha = min(1.0, 2 * (over - 0.5))
             return u, 1.0, max(0.0, alpha)
         k = self.k(i)
-        u, scale = float(k), 1.0
-        if k > self.c:
+        if k < self.head:                 # the I/O row: stays on its edge
+            return float(k), 1.0, 1.0
+        j = k - self.head
+        u, scale = float(j), 1.0
+        if j > self.c:
             th = math.pi * fold
-            u = self.c + (k - self.c) * math.cos(th)
+            u = self.c + (j - self.c) * math.cos(th)
             scale = max(0.04, abs(math.cos(th)))
-        u = (u + 0.5 * (k > self.c) * slide) * (1 + stretch)
-        return u, scale, 1.0
+        u = (u + 0.5 * (j > self.c) * slide) * (1 + stretch)
+        return self.head + u, scale, 1.0
 
 
 def build(nx, ny, buffer_cols, pitch, samples, frame=None):
@@ -94,11 +109,12 @@ def build(nx, ny, buffer_cols, pitch, samples, frame=None):
     gy = ny + 1
     buf_cols = {nx // 2, nx + 1} if buffer_cols else set()
     io = (0, ny)
-    # Rotations: the I/O row (and the buffer column at x = NX + 1) start the fold,
-    # so they land on the first physical row/column; the other buffer column is
-    # half a ring away and lands on the opposite edge.
+    # Columns: the whole ring folds; with buffer columns the rotation starts at
+    # x = NX + 1, so both buffer columns (half a ring apart) land on the edges.
+    # Rows: the rotation brings the I/O row to the top, where it stays; the
+    # compute rows fold onto each other exactly like the columns.
     rx = Ring(gx, nx + 1 if buffer_cols else 0)
-    ry = Ring(gy, ny)
+    ry = Ring(gy, ny, head=1)
 
     edges = "I/O row and buffer columns" if buffer_cols else "I/O row"
     phases = [

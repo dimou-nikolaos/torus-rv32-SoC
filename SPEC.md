@@ -132,7 +132,7 @@ Compute tile (the engine and its links arrive in M5):
 
 The core never touches the network directly: it writes NIU registers and reads its own scratchpad, while the NIU moves data in and out of the same banks.
 
-The fold is never in the RTL. The same netlist is placed in folded order by the ASIC floorplan, or by pblocks on FPGA, and on FPGA only when timing closure needs it. A folded ring of length L puts logical positions `r` and `r + L/2` on the two edges for any rotation `r`; the Y fold is rotated so the I/O row lands on a die edge. If tiles are later grouped into clusters, the cluster is the unit of the fold. `scripts/gen_fold_svg.py` draws the fold for the README (`docs/img/torus_fold*.svg`) and checks the two-pitch link bound; regenerate it whenever the grid parameters change.
+The fold is never in the RTL. The same netlist is placed in folded order by the ASIC floorplan, or by pblocks on FPGA, and on FPGA only when timing closure needs it. A folded ring of length L puts logical positions `r` and `r + L/2` on the two edges for any rotation `r`. In Y, the I/O row is placed on a die edge and the compute rows fold onto each other like the columns, giving the row order `NY, 0, NY-1, 1, …` (`8 0 7 1 6 2 5 3 4` at 8x8); with buffer columns, the X rotation puts both of them on the left and right edges. If tiles are later grouped into clusters, the cluster is the unit of the fold. `scripts/gen_fold_svg.py` draws the fold for the README (`docs/img/torus_fold*.svg`) and checks the two-pitch link bound; regenerate it whenever the grid parameters change.
 
 ### Router
 
@@ -424,6 +424,8 @@ Seven milestones, each ending in a runnable test rather than a feature list. The
 
 The exit tests summarize the microtasks below, which are the authoritative list.
 
+Progress (2026-11-17): M0 done. M1 in progress: link, router and bare torus plane are verified (cycle models, transaction-level model, throughput suite, 2M-cycle soak, deadlock shown without the bubble rule); next are the router counters, the NIU and the 2x2 SoC.
+
 Keep every exit test in the regression once it passes, so later milestones cannot silently break earlier ones.
 
 ## M0 plan: environment and first tile
@@ -489,22 +491,22 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 
 ### M1: 2x2 torus on NoC0, pipelined credit-based router
 
-- [ ] `noc_pkg` with flit, coordinates and ops → packs to 204 bits, unit test
-- [ ] Credit link sender and receiver + cycle model → random backpressure test: no overflow, no lost credit
-- [ ] Link register slice, depth 0 to 2 → full throughput at every depth
-- [ ] Credit round-trip parameter check → elaboration fails when a buffer is too shallow
-- [ ] Bubble counter on every sender + assertion → zero bubbles in all existing tests
-- [ ] Torus routing on a unidirectional plane, X first, with the lookahead port on the link → exhaustive routing test
-- [ ] 3x3 per-plane router module (direction parameters, local port optional) → lint clean, instantiated for both planes
-- [ ] Bubble rule on ring entry → unit test: local injections and X-to-Y turns blocked when fewer than two credits remain, while flits continuing on a ring never wait; bubble-rule holds counted separately from bubbles
-- [ ] Router input buffers + round-robin switch allocator → single-router random test matches the cycle model
-- [ ] Two-stage router pipeline → measured per-hop latency equals the spec
+- [x] `noc_pkg` with flit, coordinates and ops → packs to 204 bits, unit test
+- [x] Credit link sender and receiver + cycle model → random backpressure test: no overflow, no lost credit
+- [x] Link register slice, depth 0 to 2 → full throughput at every depth
+- [x] Credit round-trip parameter check → elaboration fails when a buffer is too shallow
+- [x] Bubble counter on every sender + assertion → zero bubbles in all existing tests (links, routers; the NIU senders get theirs with the NIU)
+- [x] Torus routing on a unidirectional plane, X first, with the lookahead port on the link → exhaustive routing test
+- [x] 3x3 per-plane router module (direction parameters, local port optional) → lint clean, instantiated for both planes
+- [x] Bubble rule on ring entry → unit test: local injections and X-to-Y turns blocked when fewer than two credits remain, while flits continuing on a ring never wait; bubble-rule holds counted separately from bubbles
+- [x] Router input buffers + round-robin switch allocator → single-router random test matches the cycle model
+- [x] Two-stage router pipeline → measured per-hop latency equals the spec
 - [ ] Router counters (flits, credit stalls, arbitration losses) → counters equal scoreboard counts
-- [ ] Bare 2x2 torus with traffic generators → exactly-once delivery, ordering, watchdog silent
-- [ ] Long random torus traffic with the watchdog, also on a 4x4 bare torus → no deadlock over the full run
-- [ ] Transaction-level NoC model → RTL matches it on all traffic patterns
-- [ ] Single-router throughput suite (pass-through, parallel, recovery) at slice depths 0 to 2 → one flit per cycle per output, results stored
-- [ ] Multi-hop and neighbor-permutation streams on the 2x2 and 4x4 bare torus → every link at 100%
+- [x] Bare 2x2 torus with traffic generators → exactly-once delivery, ordering, watchdog silent
+- [x] Long random torus traffic with the watchdog, also on a 4x4 bare torus → no deadlock over the full run
+- [x] Transaction-level NoC model → RTL matches it on all traffic patterns
+- [x] Single-router throughput suite (pass-through, parallel, recovery) at slice depths 0 to 2 → one flit per cycle per output, results stored
+- [x] Multi-hop and neighbor-permutation streams on the 2x2 and 4x4 bare torus → every link at 100%
 - [ ] NIU transmit path (DMA WRITE) on the TX-DMA arbiter port and per-plane injection mux → a tile sends `LEN` bytes in loopback
 - [ ] NIU receive path into the scratchpad on the RX arbiter ports → remote writes land with correct byte enables
 - [ ] In-order retire across targets → a write stream followed by a tile-control write retires in order under bank contention

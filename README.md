@@ -16,9 +16,10 @@ Status: M0 (one tile, Spike lockstep, area report, regression).
 The NoC is a 2D torus of NX x NY compute tiles plus an I/O row at `y = NY`,
 which holds the I/O tile at `(0, NY)` and router-only stops. Laid out in logical
 order, every wraparound link would span the whole die. Each ring is instead
-folded once and its two layers interleaved, starting from a rotation that puts
-the I/O row on a die edge, where the pads are. At 8x8 that gives the physical
-column order `0 7 1 6 2 5 3 4` and row order `8 7 0 6 1 5 2 4 3`, so every link,
+folded once and its two layers interleaved. The I/O row is first rotated to the
+top die edge, where the pads are, and stays there while the compute rows fold
+onto each other exactly like the columns. At 8x8 that gives the physical column
+order `0 7 1 6 2 5 3 4` and row order `8 0 7 1 6 2 5 3 4`, so every link,
 wraparound included, spans at most two tile pitches. The fold is a placement
 decision only: the RTL is the same, and the floorplan (ASIC) or pblocks (FPGA)
 apply it. With the optional buffer columns (`x = NX/2` and `x = NX + 1`) both
