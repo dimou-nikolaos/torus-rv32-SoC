@@ -144,7 +144,7 @@ Each plane has its own router per grid position: one 3x3 module, instantiated tw
 | Y ring | Y ring (continue), local |
 | Local | X ring or Y ring (injection, bubble rule applies) |
 
-That is 7 of the 9 crossbar paths; the switch allocator and crossbar implement only those. Router-only stops in the I/O row use the same module with the local port tied off. Every port is a generic credit port (flit, valid, credit return), so a cluster-level router or an express link can attach later without changing the interface. Pipeline depth is an open decision (see Open decisions).
+That is 7 of the 9 crossbar paths; the switch allocator and crossbar implement only those. Router-only stops in the I/O row use the same module with the local port tied off. Every port is a generic credit port (flit, valid, credit return), so a cluster-level router or an express link can attach later without changing the interface. Two pipeline stages per hop with lookahead routing (see Open decisions): each router computes the output port the flit will take at the next router, so allocation never waits for route computation.
 
 ### Scratchpad bank arbiter
 
@@ -587,7 +587,7 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 | I/O tile placement | In the compute grid, extra row, extra column | Decided: extra I/O row at logical `y = NY`, part of the Y rings; further row blocks later | Done |
 | Request/reply deadlock | Separate message classes, NIU always sinks requests | Decided: READ\_REQ queue sized for the worst case, ejection never waits on injection | Done |
 | Router port structure | One 3x3 router per plane, one combined router for both planes | Decided: one 3x3 router per plane; separate NIU TX paths for DMA writes and READ\_REQ replies | Done |
-| Router pipeline depth | 1, 2 or 3 stages per hop | Leaning: 2 stages (route and allocate, then traverse), lookahead routing to hide the first | M1 |
+| Router pipeline depth | 1, 2 or 3 stages per hop | Decided: 2 stages (buffer write, switch allocation and lookahead route computation; then switch traversal into the output register), routes computed one hop ahead | Done |
 | Torus deadlock avoidance | Dateline VCs, bubble flow control | Leaning: bubble on top of credits; the packet's `vc` bit stays reserved as a fallback | M3 |
 | Multicast encoding | Rectangle in the header, separate multicast flit | Open: decide with the M4 kernel-load measurements | M4 |
 | Buffer columns | None, two columns half an X ring apart | Leaning: none; enable only if a workload's model shows it needs a shared working set | M4 |
