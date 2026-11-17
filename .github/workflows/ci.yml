@@ -1,0 +1,98 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # Tool image: built only when its definition changes, tagged by hash.
+  image:
+    runs-on: ubuntu-24.04
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/${owner}/torus-tools:$(tools/image_tag.sh)" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push if missing
+        run: |
+          image="${{ steps.tag.outputs.image }}"
+          if docker manifest inspect "$image" >/dev/null 2>&1; then
+            echo "image $image exists"
+          else
+            source tools/versions.env
+            docker build -f docker/Dockerfile --build-arg BASE_IMAGE="$BASE_IMAGE" -t "$image" .
+            docker push "$image"
+          fi
+
+  regress:
+    needs: image
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ needs.image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Tool versions
+        run: |
+          git config --global --add safe.directory '*'
+          tools/print_versions.sh
+      - id: spike
+        run: echo "sha=$(git -C third_party/spike rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: build/spike-install
+          key: spike-${{ steps.spike.outputs.sha }}-${{ needs.image.outputs.image }}
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          ninja -C build
+      - name: Regression
+        run: scripts/regress.py --no-build --seed ${{ github.run_id }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regress-${{ github.sha }}
+          path: build/regress/
+
+  synth:
+    needs: image
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ needs.image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Area report
+        run: |
+          git config --global --add safe.directory '*'
+          tools/print_versions.sh > build-versions.txt
+          scripts/synth_area.py --top tile_top --flist rtl/tile/tile_syn.f \
+            --units core_wrap spm_banks obi_spm_adapter tile_ctrl counter_bank sim_console \
+            --out build/syn/tile
+          cp build-versions.txt build/syn/
+          cat build/syn/tile_area.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: area-${{ github.sha }}
+          path: build/syn/*_area.*
