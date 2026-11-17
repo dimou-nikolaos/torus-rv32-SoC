@@ -424,7 +424,7 @@ Seven milestones, each ending in a runnable test rather than a feature list. The
 
 The exit tests summarize the microtasks below, which are the authoritative list.
 
-Progress (2026-11-17): M0 done. M1 in progress: link, router and bare torus plane are verified (cycle models, transaction-level model, throughput suite, 2M-cycle soak, deadlock shown without the bubble rule); next are the router counters, the NIU and the 2x2 SoC.
+Progress (2026-11-17): M0 and M1 done. M1 results: per-hop latency 2 cycles plus link slices; every link, router port and NIU port at one flit per cycle; no deadlock in a 2M-cycle saturating soak, while builds without the bubble rule deadlock within thousands of cycles; ping-pong on the 2x2 torus at 352 cycles per 64-byte round trip, dominated by software (DMA setup and polling). Tile area (Yosys generic, in context): about 400k transistors of logic plus 64 KB SRAM; the counter bank (33 x 64-bit live + snapshot, about 160k transistors standalone) is the largest unit and is up for review. Next: M2.
 
 Keep every exit test in the regression once it passes, so later milestones cannot silently break earlier ones.
 
@@ -501,20 +501,20 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 - [x] Bubble rule on ring entry → unit test: local injections and X-to-Y turns blocked when fewer than two credits remain, while flits continuing on a ring never wait; bubble-rule holds counted separately from bubbles
 - [x] Router input buffers + round-robin switch allocator → single-router random test matches the cycle model
 - [x] Two-stage router pipeline → measured per-hop latency equals the spec
-- [ ] Router counters (flits, credit stalls, arbitration losses) → counters equal scoreboard counts
+- [x] Router counters (flits, credit stalls, arbitration losses) → counters equal scoreboard counts
 - [x] Bare 2x2 torus with traffic generators → exactly-once delivery, ordering, watchdog silent
 - [x] Long random torus traffic with the watchdog, also on a 4x4 bare torus → no deadlock over the full run
 - [x] Transaction-level NoC model → RTL matches it on all traffic patterns
 - [x] Single-router throughput suite (pass-through, parallel, recovery) at slice depths 0 to 2 → one flit per cycle per output, results stored
 - [x] Multi-hop and neighbor-permutation streams on the 2x2 and 4x4 bare torus → every link at 100%
-- [ ] NIU transmit path (DMA WRITE) on the TX-DMA arbiter port and per-plane injection mux → a tile sends `LEN` bytes in loopback
-- [ ] NIU receive path into the scratchpad on the RX arbiter ports → remote writes land with correct byte enables
-- [ ] In-order retire across targets → a write stream followed by a tile-control write retires in order under bank contention
-- [ ] NIU status, error bit and completion counters → `dma_wait` works from software, bad commands set the error bit and never hang
-- [ ] NIU injection and ejection stream → one flit per cycle sustained on TX-DMA and RX
-- [ ] `tile.h` `dma_write` and `dma_wait` → SDK test passes
-- [ ] 2x2 SoC top on NoC0 (backdoor load) → ping-pong kernel passes, round-trip latency recorded
-- [ ] Router and NIU in the Yosys report → area recorded
+- [x] NIU transmit path (DMA WRITE) on the TX-DMA arbiter port and per-plane injection mux → a tile sends `LEN` bytes in loopback
+- [x] NIU receive path into the scratchpad on the RX arbiter ports → remote writes land with correct byte enables
+- [x] In-order retire across targets → a write stream followed by a tile-control write retires in order under bank contention
+- [x] NIU status, error bit and completion counters → `dma_wait` works from software, bad commands set the error bit and never hang
+- [x] NIU injection and ejection stream → one flit per cycle sustained on TX-DMA and RX
+- [x] `tile.h` `dma_write` and `dma_wait` → SDK test passes
+- [x] 2x2 SoC top on NoC0 (backdoor load) → ping-pong kernel passes, round-trip latency recorded
+- [x] Router and NIU in the Yosys report → area recorded
 
 ### M2: I/O tile and launch
 

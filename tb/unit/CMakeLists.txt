@@ -63,3 +63,9 @@ foreach(cfg "2;2;0;0;1" "2;2;1;0;1" "4;4;0;0;1" "4;4;1;1;1" "4;4;0;2;1" "3;5;0;0
     ARGS   -GGX=${gx} -GGY=${gy} -GDIR=${dir} -GSLICE=${slice} -GBUBBLE=${bubble})
   target_compile_definitions(${name} PRIVATE N_GX=${gx} N_GY=${gy} N_DIR=${dir} N_SLICE=${slice})
 endforeach()
+
+torus_verilated_tb(tb_niu
+  TOP    tb_niu_top
+  FLISTS rtl/tile/niu.f
+  SV     tb/unit/niu/tb_niu_top.sv
+  CPP    ${CMAKE_CURRENT_SOURCE_DIR}/niu/tb_niu.cpp)

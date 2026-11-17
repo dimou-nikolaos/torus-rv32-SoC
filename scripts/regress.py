@@ -47,6 +47,8 @@ def discover(args):
     tests.append(Test("unit.flit", [str(BUILD / "tb/unit/tb_flit")]))
     for cfg in ("s0_d4", "s1_d6", "s2_d8", "s0_d3", "s2_d7"):
         tests.append(Test(f"unit.link.{cfg}", [str(BUILD / f"tb/unit/tb_link_{cfg}")]))
+    for i in range(2):
+        tests.append(Test(f"unit.niu.{i}", [str(BUILD / "tb/unit/tb_niu")]))
     for d in (0, 1):
         for sl in (0, 1, 2):
             tests.append(Test(f"unit.router.p{d}_s{sl}", [str(BUILD / f"tb/unit/tb_router_p{d}_s{sl}")]))
@@ -78,7 +80,7 @@ def discover(args):
         tests.append(Test("synth.tile", [sys.executable, "scripts/synth_area.py", "--top", "tile_top",
                                          "--flist", "rtl/tile/tile_syn.f", "--units", "core_wrap",
                                          "spm_banks", "obi_spm_adapter", "tile_ctrl", "counter_bank",
-                                         "sim_console", "--out", str(BUILD / "syn/tile")],
+                                         "sim_console", "niu", "noc_router", "--out", str(BUILD / "syn/tile")],
                           seeded=False, timeout=1800))
     return tests
 

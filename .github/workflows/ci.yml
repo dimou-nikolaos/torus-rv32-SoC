@@ -88,7 +88,7 @@ jobs:
           git config --global --add safe.directory '*'
           tools/print_versions.sh > build-versions.txt
           scripts/synth_area.py --top tile_top --flist rtl/tile/tile_syn.f \
-            --units core_wrap spm_banks obi_spm_adapter tile_ctrl counter_bank sim_console \
+            --units core_wrap spm_banks obi_spm_adapter tile_ctrl counter_bank sim_console niu noc_router \
             --out build/syn/tile
           cp build-versions.txt build/syn/
           cat build/syn/tile_area.txt >> "$GITHUB_STEP_SUMMARY"
