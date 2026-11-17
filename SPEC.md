@@ -104,7 +104,7 @@ The router grid is `GX` x `GY` with `GX = NX` (plus 2 with buffer columns) and `
 | DMA | 2 channels per tile | Channel 0 for reads (READ\_REQ), channel 1 for writes, so double buffering works |
 | Router | One 3x3 router per plane, pipelined, dimension-ordered, single-flit packets | Ports: local, X ring, Y ring (see Router). Credit-based flow control, credits sized to the link round trip |
 | NoC | 2 unidirectional planes | NoC0 east and south, NoC1 west and north, as in Wormhole |
-| Link | 204 bits per plane and direction | Optional register slices, depth 0 to 2 |
+| Link | 204-bit flit per plane and direction, plus valid, the 2-bit lookahead port and the credit return | Optional register slices, depth 0 to 2 |
 | Optional: buffer columns | Two columns half an X ring apart: logical `x = NX/2` and `x = NX + 1`, so `GX = NX + 2` | NIU plus large SRAM, no core. Being half a ring apart, they fold onto the physical left and right edges. Compute columns become non-contiguous in router coordinates; the SDK hides this |
 | Optional: extra I/O tiles | Further positions in the I/O row | The I/O row folds onto a die edge, where pads are. A second row block half a Y ring away would fold onto the opposite edge |
 
@@ -410,14 +410,14 @@ Optional: SymbiYosys properties on the router (no flit created or lost, credit c
 
 ## Milestones
 
-Seven milestones, each ending in a runnable test rather than a feature list. M3 is the one that makes this a torus; M6 is optional.
+Seven milestones, each ending in a runnable test rather than a feature list. The NoC is a torus from M1: with one-way planes a mesh cannot reach every destination (NoC0 alone cannot go west or north, and even both planes cannot reach north-east or south-west without the wraparound links). M1 builds the torus on NoC0, M3 adds NoC1. M6 is optional.
 
 | Milestone | Scope | Exit test |
 | --- | --- | --- |
 | M0 | Environment and first tile | Hello-world and ISA tests on one tile in Spike lockstep, counters read out, area report, all in CI |
-| M1 | 2x2 mesh, pipelined credit-based router, NIU | Ping-pong kernel on a 2x2 mesh (backdoor load), router throughput suite green at slice depths 0 to 2 |
-| M2 | I/O row, I/O tile and launch | memcpy on a 4x4 mesh loaded and launched from C++ through the I/O tile, bit-exact, performance model within tolerance |
-| M3 | Torus and second plane | Cannon GEMM on a 4x4 torus, bit-exact, counters within 15% of the model, long random traffic without deadlock |
+| M1 | 2x2 torus on NoC0: pipelined credit-based router, bubble rule, NIU | Ping-pong kernel on a 2x2 torus (backdoor load), router throughput suite green at slice depths 0 to 2, long random traffic without deadlock |
+| M2 | I/O row, I/O tile and launch | memcpy on a 4x4 torus (NoC0) loaded and launched from C++ through the I/O tile, bit-exact, performance model within tolerance |
+| M3 | Second plane | Cannon GEMM on a 4x4 torus with both planes, bit-exact, counters within 15% of the model |
 | M4 | Scale to 8x8 | Full kernel suite at 8x8, scaling efficiency and model error recorded |
 | M5 | Compute engine | GEMM on the engine bit-exact, speedup and perf/area against scalar recorded |
 | M6 (optional) | Place and route | Logical against folded floorplan comparison recorded |
@@ -487,29 +487,31 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 - [x] Yosys flow for the tile → area report per module
 - [x] `regress.py` with seeds and JUnit → one command green locally and in CI
 
-### M1: 2x2 mesh, pipelined credit-based router
+### M1: 2x2 torus on NoC0, pipelined credit-based router
 
 - [ ] `noc_pkg` with flit, coordinates and ops → packs to 204 bits, unit test
 - [ ] Credit link sender and receiver + cycle model → random backpressure test: no overflow, no lost credit
 - [ ] Link register slice, depth 0 to 2 → full throughput at every depth
 - [ ] Credit round-trip parameter check → elaboration fails when a buffer is too shallow
 - [ ] Bubble counter on every sender + assertion → zero bubbles in all existing tests
-- [ ] Routing function (dimension-ordered, mesh) → exhaustive routing test
+- [ ] Torus routing on a unidirectional plane, X first, with the lookahead port on the link → exhaustive routing test
 - [ ] 3x3 per-plane router module (direction parameters, local port optional) → lint clean, instantiated for both planes
+- [ ] Bubble rule on ring entry → unit test: local injections and X-to-Y turns blocked when fewer than two credits remain, while flits continuing on a ring never wait; bubble-rule holds counted separately from bubbles
 - [ ] Router input buffers + round-robin switch allocator → single-router random test matches the cycle model
 - [ ] Two-stage router pipeline → measured per-hop latency equals the spec
 - [ ] Router counters (flits, credit stalls, arbitration losses) → counters equal scoreboard counts
-- [ ] Bare 2x2 mesh with traffic generators → exactly-once delivery, ordering, watchdog silent
+- [ ] Bare 2x2 torus with traffic generators → exactly-once delivery, ordering, watchdog silent
+- [ ] Long random torus traffic with the watchdog, also on a 4x4 bare torus → no deadlock over the full run
 - [ ] Transaction-level NoC model → RTL matches it on all traffic patterns
 - [ ] Single-router throughput suite (pass-through, parallel, recovery) at slice depths 0 to 2 → one flit per cycle per output, results stored
-- [ ] Multi-hop and neighbor-permutation streams on the 2x2 grid → every link at 100%
+- [ ] Multi-hop and neighbor-permutation streams on the 2x2 and 4x4 bare torus → every link at 100%
 - [ ] NIU transmit path (DMA WRITE) on the TX-DMA arbiter port and per-plane injection mux → a tile sends `LEN` bytes in loopback
 - [ ] NIU receive path into the scratchpad on the RX arbiter ports → remote writes land with correct byte enables
 - [ ] In-order retire across targets → a write stream followed by a tile-control write retires in order under bank contention
 - [ ] NIU status, error bit and completion counters → `dma_wait` works from software, bad commands set the error bit and never hang
 - [ ] NIU injection and ejection stream → one flit per cycle sustained on TX-DMA and RX
 - [ ] `tile.h` `dma_write` and `dma_wait` → SDK test passes
-- [ ] 2x2 SoC top (backdoor load) → ping-pong kernel passes, round-trip latency recorded
+- [ ] 2x2 SoC top on NoC0 (backdoor load) → ping-pong kernel passes, round-trip latency recorded
 - [ ] Router and NIU in the Yosys report → area recorded
 
 ### M2: I/O tile and launch
@@ -531,22 +533,18 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 - [ ] DONE counter + `dev.wait` → host waits for all tiles
 - [ ] `libtorus` v0 (`Device`, `load_kernel`, `launch`, `wait`) → example program runs
 - [ ] Counter readout over the NoC → `dev.read_counters` returns all banks
-- [ ] memcpy on a 4x4 mesh launched from C++ → bit-exact, counters stored
+- [ ] memcpy on a 4x4 torus (NoC0) launched from C++ → bit-exact, counters stored
 - [ ] Performance model v0 for memcpy → prediction within tolerance of the counters
 
-### M3: torus and second plane
+### M3: second plane
 
-- [ ] Wraparound links in the grid generator (parameter) → mesh and torus both elaborate
-- [ ] Bubble rule on ring entry → unit test: local injections and X-to-Y turns blocked when fewer than two credits remain, while flits continuing on a ring never wait; bubble-rule holds counted separately from bubbles
-- [ ] Torus routing on a unidirectional plane, I/O row included in the Y rings → exhaustive routing test
-- [ ] Long random torus traffic with the watchdog → no deadlock over the full run
-- [ ] NoC1 plane (west and north) → both planes pass the traffic tests
+- [ ] NoC1 plane (west and north) → both planes pass the traffic tests, I/O row included in the Y rings
 - [ ] Automatic plane selection in the DMA (fixed per source and destination) → measured hop counts match the prediction, per (src, dst) ordering holds
 - [ ] NoC model updated for torus and two planes → RTL matches
 - [ ] `neighbor()` in `tile.h` → wraparound over the compute grid passes, I/O row skipped
 - [ ] Cannon GEMM, scalar, 4x4 → bit-exact
 - [ ] Cannon counters vs the performance model → within 15%
-- [ ] Same kernels on mesh and torus → comparison table recorded
+- [ ] Same kernels on one plane and on two planes → comparison table recorded
 
 ### M4: scale to 8x8
 
