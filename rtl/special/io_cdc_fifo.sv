@@ -1,5 +1,5 @@
 // Asynchronous FIFO: the design's only clock-domain crossing (SPEC.md, I/O
-// tile). DEPTH entries (a power of two) of type T, written in the wclk domain
+// tile). DEPTH entries (a power of two) of WIDTH bits, written in the wclk domain
 // and read in the rclk domain. Each side keeps a binary pointer and its Gray
 // copy; the Gray pointer crosses through SYNC flip-flops, so at most one bit
 // changes per step and the far side sees either the old or the new value.
@@ -8,7 +8,7 @@
 //
 // Each side has its own asynchronous reset; both must be applied together.
 module io_cdc_fifo #(
-  parameter type         T     = logic [31:0],
+  parameter int unsigned WIDTH = 32,
   parameter int unsigned DEPTH = 8,
   parameter int unsigned SYNC  = 2,
   localparam int unsigned AW   = $clog2(DEPTH)
@@ -17,13 +17,13 @@ module io_cdc_fifo #(
   input  logic wclk_i,
   input  logic wrst_ni,
   input  logic push_i,
-  input  T     data_i,
+  input  logic [WIDTH-1:0] data_i,
   output logic full_o,
   // Read side
   input  logic rclk_i,
   input  logic rrst_ni,
   input  logic pop_i,
-  output T     head_o,
+  output logic [WIDTH-1:0] head_o,
   output logic empty_o
 );
   if (DEPTH < 2 || (1 << AW) != DEPTH || SYNC < 2) begin : g_check
@@ -34,12 +34,14 @@ module io_cdc_fifo #(
     return b ^ (b >> 1);
   endfunction
 
-  T mem [DEPTH];
+  logic [WIDTH-1:0] mem [DEPTH];
+
+  logic [AW:0] wbin_q, wgray_q;  // write side
+  logic [AW:0] rgray_w [SYNC];   // read pointer synchronized into wclk
+  logic [AW:0] rbin_q, rgray_q;  // read side
+  logic [AW:0] wgray_r [SYNC];   // write pointer synchronized into rclk
 
   // ------------------------------------------------------------ write side
-  logic [AW:0] wbin_q, wgray_q;
-  logic [AW:0] rgray_w [SYNC];   // read pointer synchronized into wclk
-
   always_ff @(posedge wclk_i or negedge wrst_ni)
     if (!wrst_ni) begin
       wbin_q  <= '0;
@@ -65,9 +67,6 @@ module io_cdc_fifo #(
   assign full_o = (wgray_q ^ rgray_w[SYNC-1]) == LAP;
 
   // ------------------------------------------------------------- read side
-  logic [AW:0] rbin_q, rgray_q;
-  logic [AW:0] wgray_r [SYNC];   // write pointer synchronized into rclk
-
   always_ff @(posedge rclk_i or negedge rrst_ni)
     if (!rrst_ni) begin
       rbin_q  <= '0;

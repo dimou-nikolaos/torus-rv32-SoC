@@ -79,3 +79,10 @@ foreach(depth 8 16)
     CPP    ${CMAKE_CURRENT_SOURCE_DIR}/cdc/tb_cdc.cpp
     ARGS   -GDEPTH=${depth})
 endforeach()
+
+# I/O tile: AXI front-end, crossings, bridge, register block
+torus_verilated_tb(tb_io
+  TOP    tb_io_top
+  FLISTS rtl/noc/noc.f rtl/special/io.f
+  SV     tb/unit/io/tb_io_top.sv
+  CPP    ${CMAKE_CURRENT_SOURCE_DIR}/io/tb_io.cpp)

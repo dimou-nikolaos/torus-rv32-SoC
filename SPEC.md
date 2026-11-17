@@ -191,7 +191,8 @@ The I/O tile is an NIU, a bridge, a front-end and a small register block. The re
 | Front-end | Selected by parameter: AXI slave (default), JTAG debug module SBA, SPI slave |
 | Clock crossing | Async FIFO between the front-end clock and the fabric clock; the only CDC point in the design |
 | Bridge | Maps a global address (tile x, tile y, local address) to NoC packets: AXI bursts split into 128-bit WRITE flits (AXI byte strobes become `be`, so the host may write unaligned), reads become READ\_REQ round trips with at most `IO_RD_OUTSTANDING` in flight, with backpressure to the front-end |
-| NIU | The same NIU as in compute tiles |
+| NIU | A reduced NIU: injection from the bridge, and an ejection path that always drains (READ\_RSP into the bridge's reorder slots, WRITE and ATOMIC\_INC into the register block, anything else dropped and counted). The compute NIU's DMA channels have no use here: the I/O tile has no scratchpad to send from |
+| Register block | At local `0x1000_4000`: 16 host semaphores (`SEM[0]` is DONE; read/write by the host, ATOMIC\_INC and WRITE by tiles), `INFO` (version, GX, GY, `IO_RD_OUTSTANDING`), fabric cycles, and counters of WRITE flits, READ\_REQs, READ\_RSP flits, dropped flits and atomics |
 
 How each flow drives it:
 
@@ -202,6 +203,8 @@ How each flow drives it:
 | FPGA bring-up | JTAG debug module, system bus access | A few hundred KB/s: fine for load, run, read back; not for streaming |
 | ASIC study | AXI ports left as top-level pins | Area and timing reported for fabric + I/O tile, excluding PCIe controller and PHY |
 | Tapeout (if ever) | JTAG SBA or SPI front-end | AXI needs far more pins than a shuttle-class chip has |
+
+Global address on the AXI port (32 bits): `[31:28]` tile x, `[27:24]` tile y, `[23:20]` window, `[19:16]` zero, `[15:0]` offset. Window 0 is the tile's scratchpad (local address = offset); window 1 its registers (local address `0x1000_0000` + offset): tile control and the counter bank on compute tiles, the register block on the I/O tile. The data bus is 128 bits, one beat per flit; bursts are INCR with full-width beats. A burst to anything else (router-only stops, NIU registers, other windows, other sizes or burst types) gets SLVERR and sends nothing; reads still pass through the bridge so responses stay in order. Writes are posted: B returns once the last beat is in the clock crossing, ahead of everything the host sends next. Reads are split into READ\_REQs of at most 64 bytes, each owning one of `IO_RD_OUTSTANDING` reorder slots (its replies return to slot × 64 in the I/O tile), and slots drain in order, so R beats come back in request order whatever order the tiles answer in.
 
 Verification: the AXI model and bridge get their own testbench (bursts, byte strobes, backpressure, read ordering) against a golden memory model, and the CDC FIFO is checked with randomized clock ratios. One small regression test loads and runs hello-world through the JTAG SBA front-end, so that path stays verified while every other test uses the AXI model.
 
@@ -519,11 +522,11 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 
 ### M2: I/O tile and launch
 
-- [ ] C++ AXI bus functional model through DPI → burst write and read test against a memory model
+- [x] C++ AXI bus functional model through DPI → burst write and read test against a memory model (drives the top-level AXI pins directly from C++ rather than through DPI: the same RTL boundary, and simpler with two clocks)
 - [x] Async CDC FIFO → randomized clock-ratio test passes, no loss or duplication (ratios 1:1 to 1:9 both ways, drifting near-equal clocks, jitter; full throughput at the slower clock with depth 8)
 - [x] I/O row in the grid generator (router-only stops, I/O tile at (0, NY)) → grid elaborates, `compute_grid()` excludes the row (tile control `GRID` register; DMA to a router-only stop is a command error)
-- [ ] AXI-to-NoC bridge with burst splitting, byte strobes, `IO_RD_OUTSTANDING` and backpressure → host write lands in any tile's scratchpad
-- [ ] I/O tile assembled (AXI front-end, FIFO, bridge, NIU) → I/O tile testbench passes
+- [x] AXI-to-NoC bridge with burst splitting, byte strobes, `IO_RD_OUTSTANDING` and backpressure → host write lands in any tile's scratchpad
+- [x] I/O tile assembled (AXI front-end, FIFO, bridge, NIU) → I/O tile testbench passes (six AXI:fabric clock ratios; writes and streamed reads at the slower clock's beat rate)
 - [ ] C++ remote read and write API → unit test passes
 - [ ] `CTRL.run` over the NoC → host releases a core remotely
 - [ ] ELF loading through the I/O tile → backdoor removed, hello-world runs

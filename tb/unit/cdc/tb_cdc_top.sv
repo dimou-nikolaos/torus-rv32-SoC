@@ -13,5 +13,5 @@ module tb_cdc_top #(
   output logic [31:0] head_o,
   output logic        empty_o
 );
-  io_cdc_fifo #(.T(logic [31:0]), .DEPTH(DEPTH)) u_dut (.*);
+  io_cdc_fifo #(.WIDTH(32), .DEPTH(DEPTH)) u_dut (.*);
 endmodule

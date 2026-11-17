@@ -51,6 +51,8 @@ def discover(args):
         tests.append(Test(f"unit.niu.{i}", [str(BUILD / "tb/unit/tb_niu")]))
     for depth in (8, 16):
         tests.append(Test(f"unit.cdc.d{depth}", [str(BUILD / f"tb/unit/tb_cdc_d{depth}"), "--quiet"]))
+    for r in range(6):   # AXI : fabric clock ratios
+        tests.append(Test(f"unit.io.r{r}", [str(BUILD / "tb/unit/tb_io"), f"--ratio={r}"]))
     for d in (0, 1):
         for sl in (0, 1, 2):
             tests.append(Test(f"unit.router.p{d}_s{sl}", [str(BUILD / f"tb/unit/tb_router_p{d}_s{sl}")]))
@@ -90,6 +92,12 @@ def discover(args):
                                          "spm_banks", "obi_spm_adapter", "tile_ctrl", "counter_bank",
                                          "sim_console", "niu", "noc_router", "--out", str(BUILD / "syn/tile")],
                           seeded=False, timeout=1800))
+        tests.append(Test("synth.io", [sys.executable, "scripts/synth_area.py", "--top", "io_tile",
+                                       "--flist", "rtl/special/io_syn.f", "--units", "io_axi_front", "io_bridge",
+                                       "io_regs", "io_cdc_fifo", "--out", str(BUILD / "syn/io")],
+                          seeded=False, timeout=1800))
+    tests.append(Test("lint.io_tile", lint + ["--top-module", "io_tile", "-f", "rtl/special/io_syn.f"],
+                      seeded=False))
     return tests
 
 
