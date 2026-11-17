@@ -16,12 +16,12 @@ jobs:
     outputs:
       image: ${{ steps.tag.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: tag
         run: |
           owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "image=ghcr.io/${owner}/torus-tools:$(tools/image_tag.sh)" >> "$GITHUB_OUTPUT"
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -46,7 +46,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Tool versions
@@ -55,7 +55,7 @@ jobs:
           tools/print_versions.sh
       - id: spike
         run: echo "sha=$(git -C third_party/spike rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: build/spike-install
           key: spike-${{ steps.spike.outputs.sha }}-${{ needs.image.outputs.image }}
@@ -65,7 +65,7 @@ jobs:
           ninja -C build
       - name: Regression
         run: scripts/regress.py --no-build --seed ${{ github.run_id }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: regress-${{ github.sha }}
@@ -80,7 +80,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Area report
@@ -92,7 +92,7 @@ jobs:
             --out build/syn/tile
           cp build-versions.txt build/syn/
           cat build/syn/tile_area.txt >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: area-${{ github.sha }}
           path: build/syn/*_area.*
