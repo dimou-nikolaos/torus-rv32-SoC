@@ -234,7 +234,7 @@ DMA moves whole flits: every DMA flit has all 16 byte enables set. Sub-16-byte w
 
 Tile control registers: `COORD` (read-only own x, y), `CTRL` (bit 0 = run; the host clears it to hold the core in reset), `CYCLE` (free-running counter), `DOORBELL` (set by an incoming ATOMIC\_INC to a watched address; lets the core use `wfi` later instead of polling).
 
-Counter bank: 64-bit counters that count only while `CTRL.run` is set. Counter *i* is at `+8i` (live; reading the low word latches the high word, so low-then-high is one consistent value) and at `+0x800 + 8i` (snapshot). `+0xFF0` returns the number of counters. `PERF_CMD` (`+0xFF4`, write-only) bit 0 copies every counter into the snapshot view in the same cycle, and bit 1 clears every live counter. Both bits in one write capture the totals and restart from zero. The counters are otherwise read-only, from the local core and remotely.
+Counter bank: ten 48-bit counters that count only while `CTRL.run` is set. Counters 0 and 1 are fixed (cycles, retired instructions); counters 2 to 9 each count the event named by their select register at `+0x400 + 4k`, any of the tile's events (stalls, arbiter denials and promotions per port, NIU flits and errors, router flits, credit stalls, arbitration losses and bubble-rule holds per port). After reset the selects pick fetch stalls, data stalls, NIU flits sent, received and dropped, and the router's three output flit counts. Counter *i* is at `+8i` (live; reading the low word latches the high word, so low-then-high is one consistent value) and at `+0x800 + 8i` (snapshot). `+0xFF0` returns the number of counters, `+0xFF8` the number of events. `PERF_CMD` (`+0xFF4`, write-only) bit 0 copies every counter into the snapshot view in the same cycle, and bit 1 clears every live counter. Both bits in one write capture the totals and restart from zero. Selects and `PERF_CMD` are writable from the local core and remotely; the counters themselves are read-only. Collecting more than eight events per kernel takes several runs or a rotating selection; that is the price of a bank about a quarter the size of one counter per event.
 
 Semaphores are plain 32-bit words in the scratchpad. ATOMIC\_INC is executed by the receiving NIU as a read-modify-write, so no core is involved and no lock is needed. Atomics from both RX ports go through one atomic unit in the NIU, so increments arriving on both planes to the same word in the same cycle are serialized, and the bank lock keeps other masters out during the read-modify-write. Software contract: the core does not write a semaphore word while remote tiles may increment it (resetting it is fine once all increments for the round have landed).
 
@@ -355,7 +355,7 @@ auto perf = dev.read_counters();                          // compared against th
 
 Launch protocol:
 
-1. Host clears `CTRL.run` on every target tile and clears their counters (`PERF_CMD.clear`).
+1. Host clears `CTRL.run` on every target tile, selects the counter events it wants and clears the counters (`PERF_CMD.clear`).
 2. Host writes the ELF segments into each tile scratchpad.
 3. Host writes per-tile args into the mailbox.
 4. Host sets `CTRL.run`; cores boot at `0x0`.
@@ -424,7 +424,7 @@ Seven milestones, each ending in a runnable test rather than a feature list. The
 
 The exit tests summarize the microtasks below, which are the authoritative list.
 
-Progress (2026-11-17): M0 and M1 done. M1 results: per-hop latency 2 cycles plus link slices; every link, router port and NIU port at one flit per cycle; no deadlock in a 2M-cycle saturating soak, while builds without the bubble rule deadlock within thousands of cycles; ping-pong on the 2x2 torus at 352 cycles per 64-byte round trip, dominated by software (DMA setup and polling). Tile area (Yosys generic, in context): about 400k transistors of logic plus 64 KB SRAM; the counter bank (33 x 64-bit live + snapshot, about 160k transistors standalone) is the largest unit and is up for review. Next: M2.
+Progress (2026-11-17): M0 and M1 done. M1 results: per-hop latency 2 cycles plus link slices; every link, router port and NIU port at one flit per cycle; no deadlock in a 2M-cycle saturating soak, while builds without the bubble rule deadlock within thousands of cycles; ping-pong on the 2x2 torus at 352 cycles per 64-byte round trip, dominated by software (DMA setup and polling). Tile area (Yosys generic, in context): about 400k transistors of logic plus 64 KB SRAM with one 64-bit counter per event; the counter bank was then reduced to 2 fixed + 8 programmable 48-bit counters (about 160k to 43k transistors standalone). Next: M2.
 
 Keep every exit test in the regression once it passes, so later milestones cannot silently break earlier ones.
 

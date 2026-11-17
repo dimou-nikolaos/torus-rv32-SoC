@@ -53,6 +53,23 @@ int kernel_main(const args_t *args) {
   // Counter bank: count, monotonic counters, retired <= cycles
   CHECK(perf_count() == PERF_NUM_COUNTERS);
   CHECK(mmio_read(TILE_PERF_BASE + PERF_CMD_OFFSET) == 0);
+  CHECK(perf_events() == PERF_NUM_EVENTS);
+  // Default selects, then reprogramming one: counter 9 counts retired instructions
+  CHECK(mmio_read(TILE_PERF_BASE + PERF_SEL_BASE) == PERF_EV_FETCH_STALL);
+  CHECK(mmio_read(TILE_PERF_BASE + PERF_SEL_BASE + 4 * 7) == PERF_EV_R0_FLIT + 2);
+  perf_select(9, PERF_EV_RETIRED);
+  perf_cmd(PERF_CMD_CLEAR);
+  for (volatile int i = 0; i < 30; i++) {
+  }
+  perf_cmd(PERF_CMD_SNAPSHOT);
+  uint64_t a = perf_read_snapshot(PERF_RETIRED), b = perf_read_snapshot(9);
+  CHECK(a > 30 && a == b);
+  perf_select(9, 200);  // names no event: counts nothing
+  uint64_t c = perf_read(9);
+  for (volatile int i = 0; i < 10; i++) {
+  }
+  CHECK(perf_read(9) == c);
+  perf_select(9, PERF_EV_R0_FLIT + 2);
   uint64_t r0 = perf_read(PERF_RETIRED), y0 = perf_read(PERF_CYCLES);
   for (volatile int i = 0; i < 50; i++) {
   }

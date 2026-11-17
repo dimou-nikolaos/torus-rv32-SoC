@@ -86,29 +86,37 @@ package tile_pkg;
   } reg_rsp_t;
 
   // ------------------------------------------------------- performance counters
-  // Tile counter bank layout (rtl/perf/counter_bank.sv): live counter i at
-  // PERF_BASE + 8*i (lo; hi latched when lo is read), its snapshot at
-  // PERF_BASE + 0x800 + 8*i, the number of counters at + 0xFF0 and PERF_CMD
-  // (snapshot, clear) at + 0xFF4.
+  // Tile counter bank (rtl/perf/counter_bank.sv): counters 0 and 1 count cycles
+  // and retired instructions, counters 2..9 count the event their select names.
+  // Event numbers (the select values):
   typedef enum int unsigned {
-    PC_CYCLES      = 0,   // cycles with CTRL.run set
-    PC_RETIRED     = 1,   // retired instructions
-    PC_FETCH_STALL = 2,   // IF had no valid instruction for ID
-    PC_DATA_STALL  = 3,   // WB stalled on a data access
-    PC_DENIED_0    = 4,   // 4..10: arbiter denials per port
-    PC_PROMOTED_0  = 4 + SPM_PORTS,  // 11..17: grants through promotion per port
-    PC_NIU_TX      = 4 + 2 * SPM_PORTS,      // 18: flits injected by the NIU
-    PC_NIU_RX      = 5 + 2 * SPM_PORTS,      // 19: flits retired by the NIU
-    PC_NIU_ERR     = 6 + 2 * SPM_PORTS,      // 20: flits dropped (unsupported op or address)
-    PC_R0_FLIT     = 7 + 2 * SPM_PORTS,      // 21..23: NoC0 router flits per output (L, X, Y)
-    PC_R0_CSTALL   = 10 + 2 * SPM_PORTS,     // 24..26: per output, waiting with no credit
-    PC_R0_ARBLOSS  = 13 + 2 * SPM_PORTS,     // 27..29: per input, eligible but lost arbitration
-    PC_R0_BHOLD    = 16 + 2 * SPM_PORTS,     // 30..32: per output, entering flit held by the bubble rule
-    PC_NUM         = 19 + 2 * SPM_PORTS
-  } perf_counter_e;
+    EV_CYCLES      = 0,   // cycles with CTRL.run set (fixed counter 0)
+    EV_RETIRED     = 1,   // retired instructions (fixed counter 1)
+    EV_FETCH_STALL = 2,   // IF had no valid instruction for ID
+    EV_DATA_STALL  = 3,   // WB stalled on a data access
+    EV_DENIED_0    = 4,   // 4..10: arbiter denials per port
+    EV_PROMOTED_0  = 4 + SPM_PORTS,  // 11..17: grants through promotion per port
+    EV_NIU_TX      = 4 + 2 * SPM_PORTS,      // 18: flits injected by the NIU
+    EV_NIU_RX      = 5 + 2 * SPM_PORTS,      // 19: flits retired by the NIU
+    EV_NIU_ERR     = 6 + 2 * SPM_PORTS,      // 20: flits dropped (unsupported op or address)
+    EV_R0_FLIT     = 7 + 2 * SPM_PORTS,      // 21..23: NoC0 router flits per output (L, X, Y)
+    EV_R0_CSTALL   = 10 + 2 * SPM_PORTS,     // 24..26: per output, waiting with no credit
+    EV_R0_ARBLOSS  = 13 + 2 * SPM_PORTS,     // 27..29: per input, eligible but lost arbitration
+    EV_R0_BHOLD    = 16 + 2 * SPM_PORTS,     // 30..32: per output, entering flit held by the bubble rule
+    EV_NUM         = 19 + 2 * SPM_PORTS
+  } perf_event_e;
+  localparam int unsigned PERF_NFIX  = 2;
+  localparam int unsigned PERF_NPROG = 8;
+  // Selects after reset: the counters most runs want
+  localparam logic [PERF_NPROG-1:0][7:0] PERF_DEFAULT_SEL = '{
+    8'(EV_R0_FLIT + 2), 8'(EV_R0_FLIT + 1), 8'(EV_R0_FLIT), 8'(EV_NIU_ERR),
+    8'(EV_NIU_RX), 8'(EV_NIU_TX), 8'(EV_DATA_STALL), 8'(EV_FETCH_STALL)
+  };
+  localparam logic [11:0] PERF_SEL_BASE     = 12'h400;
   localparam logic [11:0] PERF_SNAP_BASE    = 12'h800;
   localparam logic [11:0] PERF_NUM_OFFSET   = 12'hFF0;
   localparam logic [11:0] PERF_CMD_OFFSET   = 12'hFF4;
+  localparam logic [11:0] PERF_NEV_OFFSET   = 12'hFF8;
   localparam int unsigned PERF_CMD_SNAPSHOT = 0;
   localparam int unsigned PERF_CMD_CLEAR    = 1;
 

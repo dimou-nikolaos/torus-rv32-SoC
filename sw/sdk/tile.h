@@ -26,27 +26,48 @@ extern "C" {
 #define CONSOLE_TX      0x00
 #define CONSOLE_EXIT    0x04
 
-// Counter bank indices (rtl/pkg/tile_pkg.sv, perf_counter_e)
+// Counter bank (rtl/perf/counter_bank.sv): counters 0 and 1 are fixed (cycles,
+// retired instructions); counters 2..9 count the event their select names.
 enum {
   PERF_CYCLES = 0,
   PERF_RETIRED = 1,
-  PERF_FETCH_STALL = 2,
-  PERF_DATA_STALL = 3,
-  PERF_DENIED_0 = 4,     // 4..10 per arbiter port
-  PERF_PROMOTED_0 = 11,  // 11..17 per arbiter port
-  PERF_NIU_TX = 18,
-  PERF_NIU_RX = 19,
-  PERF_NIU_ERR = 20,
-  PERF_R0_FLIT = 21,     // 21..23 NoC0 router flits per output (L, X, Y)
-  PERF_R0_CSTALL = 24,   // 24..26 per output: waiting, no credit
-  PERF_R0_ARBLOSS = 27,  // 27..29 per input: lost arbitration
-  PERF_R0_BHOLD = 30,    // 30..32 per output: entering flit held by the bubble rule
-  PERF_NUM_COUNTERS = 33,
+  PERF_PROG_0 = 2,           // first programmable counter
+  PERF_NUM_COUNTERS = 10,
+  // Programmable counters as selected after reset
+  PERF_C_FETCH_STALL = 2,
+  PERF_C_DATA_STALL = 3,
+  PERF_C_NIU_TX = 4,
+  PERF_C_NIU_RX = 5,
+  PERF_C_NIU_ERR = 6,
+  PERF_C_R0_FLIT_L = 7,
+  PERF_C_R0_FLIT_X = 8,
+  PERF_C_R0_FLIT_Y = 9,
+  // Register offsets
+  PERF_SEL_BASE = 0x400,
   PERF_SNAP_BASE = 0x800,
   PERF_NUM_OFFSET = 0xFF0,
   PERF_CMD_OFFSET = 0xFF4,
+  PERF_NEV_OFFSET = 0xFF8,
   PERF_CMD_SNAPSHOT = 1u << 0,
   PERF_CMD_CLEAR = 1u << 1,
+};
+
+// Event numbers for the select registers (rtl/pkg/tile_pkg.sv, perf_event_e)
+enum {
+  PERF_EV_CYCLES = 0,
+  PERF_EV_RETIRED = 1,
+  PERF_EV_FETCH_STALL = 2,
+  PERF_EV_DATA_STALL = 3,
+  PERF_EV_DENIED_0 = 4,     // 4..10 per arbiter port
+  PERF_EV_PROMOTED_0 = 11,  // 11..17 per arbiter port
+  PERF_EV_NIU_TX = 18,
+  PERF_EV_NIU_RX = 19,
+  PERF_EV_NIU_ERR = 20,
+  PERF_EV_R0_FLIT = 21,     // 21..23 NoC0 router flits per output (L, X, Y)
+  PERF_EV_R0_CSTALL = 24,   // 24..26 per output: waiting, no credit
+  PERF_EV_R0_ARBLOSS = 27,  // 27..29 per input: lost arbitration
+  PERF_EV_R0_BHOLD = 30,    // 30..32 per output: entering flit held by the bubble rule
+  PERF_NUM_EVENTS = 33,
 };
 
 static inline uint32_t mmio_read(uint32_t addr) { return *(volatile uint32_t *)addr; }
@@ -75,6 +96,13 @@ static inline uint64_t perf_read(unsigned idx) {
 }
 
 static inline unsigned perf_count(void) { return mmio_read(TILE_PERF_BASE + PERF_NUM_OFFSET); }
+static inline unsigned perf_events(void) { return mmio_read(TILE_PERF_BASE + PERF_NEV_OFFSET); }
+
+// Make programmable counter `counter` (PERF_PROG_0..) count `event` (PERF_EV_*).
+// Its value is kept; clear the counters to start from zero.
+static inline void perf_select(unsigned counter, unsigned event) {
+  mmio_write(TILE_PERF_BASE + PERF_SEL_BASE + 4 * (counter - PERF_PROG_0), event);
+}
 
 // Snapshot all counters at once and/or clear them (PERF_CMD_SNAPSHOT | PERF_CMD_CLEAR).
 static inline void perf_cmd(uint32_t cmd) { mmio_write(TILE_PERF_BASE + PERF_CMD_OFFSET, cmd); }

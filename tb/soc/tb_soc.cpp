@@ -41,9 +41,9 @@ constexpr uint32_t kSpmBytes = 64 * 1024;
 constexpr uint32_t kTctrlCoord = 0x10001000, kTctrlCtrl = 0x10001004;
 constexpr uint32_t kPerfBase = 0x10002000, kPerfSnap = 0x10002800, kPerfNum = 0x10002FF0, kPerfCmd = 0x10002FF4;
 constexpr uint32_t kPerfCmdSnapshot = 1, kPerfCmdClear = 2;
-// Counter indices (rtl/pkg/tile_pkg.sv)
-enum { C_CYCLES = 0, C_RETIRED = 1, C_FETCH = 2, C_DATA = 3, C_NIU_TX = 18, C_NIU_RX = 19, C_NIU_ERR = 20,
-       C_R0_FLIT = 21 };
+// Counter indices, with the selects the counter bank has after reset
+enum { C_CYCLES = 0, C_RETIRED = 1, C_FETCH = 2, C_DATA = 3, C_NIU_TX = 4, C_NIU_RX = 5, C_NIU_ERR = 6,
+       C_R0_FLIT = 7 };
 const char* kCounterNames[] = {"cycles", "retired", "fetch_stall", "data_stall"};
 
 struct Tile {

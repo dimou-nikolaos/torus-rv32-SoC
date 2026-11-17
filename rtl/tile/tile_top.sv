@@ -226,25 +226,25 @@ module tile_top
     .doorbell_set_i(1'b0), .run_o(run), .cycle_o(cycle)
   );
 
-  logic [PC_NUM-1:0] perf_ev;
+  logic [EV_NUM-1:0] perf_ev;
   always_comb begin
     perf_ev                 = '0;
-    perf_ev[PC_CYCLES]      = 1'b1;
-    perf_ev[PC_RETIRED]     = ev_retire;
-    perf_ev[PC_FETCH_STALL] = ev_fetch_stall;
-    perf_ev[PC_DATA_STALL]  = ev_data_stall;
-    perf_ev[PC_DENIED_0   +: SPM_PORTS] = spm_denied;
-    perf_ev[PC_PROMOTED_0 +: SPM_PORTS] = spm_promoted;
-    perf_ev[PC_NIU_TX]                  = ev_tx;
-    perf_ev[PC_NIU_RX]                  = ev_rx;
-    perf_ev[PC_NIU_ERR]                 = ev_err;
-    perf_ev[PC_R0_FLIT    +: NPORTS]    = r_ev_flit;
-    perf_ev[PC_R0_CSTALL  +: NPORTS]    = r_ev_cstall;
-    perf_ev[PC_R0_ARBLOSS +: NPORTS]    = r_ev_arbloss;
-    perf_ev[PC_R0_BHOLD   +: NPORTS]    = r_ev_bhold;
+    perf_ev[EV_CYCLES]      = 1'b1;
+    perf_ev[EV_RETIRED]     = ev_retire;
+    perf_ev[EV_FETCH_STALL] = ev_fetch_stall;
+    perf_ev[EV_DATA_STALL]  = ev_data_stall;
+    perf_ev[EV_DENIED_0   +: SPM_PORTS] = spm_denied;
+    perf_ev[EV_PROMOTED_0 +: SPM_PORTS] = spm_promoted;
+    perf_ev[EV_NIU_TX]                  = ev_tx;
+    perf_ev[EV_NIU_RX]                  = ev_rx;
+    perf_ev[EV_NIU_ERR]                 = ev_err;
+    perf_ev[EV_R0_FLIT    +: NPORTS]    = r_ev_flit;
+    perf_ev[EV_R0_CSTALL  +: NPORTS]    = r_ev_cstall;
+    perf_ev[EV_R0_ARBLOSS +: NPORTS]    = r_ev_arbloss;
+    perf_ev[EV_R0_BHOLD   +: NPORTS]    = r_ev_bhold;
   end
 
-  counter_bank #(.N(PC_NUM)) u_perf (
+  counter_bank #(.NEV(EV_NUM), .NFIX(PERF_NFIX), .NPROG(PERF_NPROG), .DEFAULT_SEL(PERF_DEFAULT_SEL)) u_perf (
     .clk_i, .rst_ni, .enable_i(run), .events_i(perf_ev),
     .core_req_i(perf_req), .core_rsp_o(perf_rsp),
     .rmt_req_i (rmt_perf_req),        .rmt_rsp_o (rmt_perf_rsp)

@@ -105,6 +105,6 @@ int kernel_main(const args_t *args) {
   CHECK(memcmp(dst_a, src_a, BIG) == 0);
 
   printf("dmatest OK on tile (%u,%u): %lu flits sent, %lu received\n", me.x, me.y,
-         (unsigned long)perf_read(PERF_NIU_TX), (unsigned long)perf_read(PERF_NIU_RX));
-  return perf_read(PERF_NIU_ERR) == 0 ? 0 : 1;
+         (unsigned long)perf_read(PERF_C_NIU_TX), (unsigned long)perf_read(PERF_C_NIU_RX));
+  return perf_read(PERF_C_NIU_ERR) == 0 ? 0 : 1;
 }
