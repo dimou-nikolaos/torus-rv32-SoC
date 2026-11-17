@@ -40,3 +40,26 @@ foreach(dir 0 1)
     target_compile_definitions(${name} PRIVATE R_DIR=${dir} R_SLICE=${slice})
   endforeach()
 endforeach()
+
+# Bare NoC plane: 2x2 and 4x4, both directions, slice depths, an odd ring
+# (3x5, as with the I/O row), and builds without the bubble rule that must
+# deadlock. Those start at 3x3: on rings of length 2 a flit never takes two
+# hops in one dimension, so no ring can form a cyclic wait.
+foreach(cfg "2;2;0;0;1" "2;2;1;0;1" "4;4;0;0;1" "4;4;1;1;1" "4;4;0;2;1" "3;5;0;0;1" "3;3;0;0;0" "4;4;0;0;0")
+  list(GET cfg 0 gx)
+  list(GET cfg 1 gy)
+  list(GET cfg 2 dir)
+  list(GET cfg 3 slice)
+  list(GET cfg 4 bubble)
+  set(name tb_noc_${gx}x${gy}_p${dir}_s${slice})
+  if(NOT bubble)
+    set(name ${name}_nobubble)
+  endif()
+  torus_verilated_tb(${name}
+    TOP    tb_noc_top
+    FLISTS rtl/noc/noc.f
+    SV     tb/unit/noc/tb_noc_top.sv
+    CPP    ${CMAKE_CURRENT_SOURCE_DIR}/noc/tb_noc.cpp
+    ARGS   -GGX=${gx} -GGY=${gy} -GDIR=${dir} -GSLICE=${slice} -GBUBBLE=${bubble})
+  target_compile_definitions(${name} PRIVATE N_GX=${gx} N_GY=${gy} N_DIR=${dir} N_SLICE=${slice})
+endforeach()

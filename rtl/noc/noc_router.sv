@@ -23,7 +23,8 @@ module noc_router
   parameter int unsigned GY        = 2,
   parameter int unsigned DEPTH     = 5,     // every input buffer (and downstream buffer)
   parameter int unsigned LINK_SLICE = 0,    // register slices on the links, for the depth check
-  parameter bit          HAS_LOCAL = 1'b1   // 0: router-only stop, local port tied off
+  parameter bit          HAS_LOCAL = 1'b1,  // 0: router-only stop, local port tied off
+  parameter bit          BUBBLE    = 1'b1   // 0 only in the test that shows the deadlock it prevents
 ) (
   input  logic          clk_i,
   input  logic          rst_ni,
@@ -109,7 +110,7 @@ module noc_router
       for (int i = 0; i < NPORTS; i++) begin
         cand[o][i] = !empty[i] && int'(head[i].la_port) == o;
         elig[o][i] = cand[o][i] &&
-                     (entering(i, o) ? credits[o] >= CW'(2) : credits[o] != '0);
+                     ((BUBBLE && entering(i, o)) ? credits[o] >= CW'(2) : credits[o] != '0);
       end
       // Round-robin: first eligible input after the last one granted
       grant[o] = '0;
@@ -172,7 +173,7 @@ module noc_router
       ev_credit_stall_o[o] = |cand[o] && credits[o] == '0;
       ev_bubble_hold_o[o]  = 1'b0;
       for (int i = 0; i < NPORTS; i++)
-        ev_bubble_hold_o[o] |= cand[o][i] && entering(i, o) && credits[o] == CW'(1);
+        ev_bubble_hold_o[o] |= BUBBLE && cand[o][i] && entering(i, o) && credits[o] == CW'(1);
       ev_bubble_o[o]       = |elig[o] && !send[o];
     end
   always_comb
