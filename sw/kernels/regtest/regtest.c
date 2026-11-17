@@ -38,6 +38,10 @@ int kernel_main(const args_t *args) {
   CHECK(me.x == (hartid & 0xf) && me.y == ((hartid >> 4) & 0xf));
   CHECK((mmio_read(TILE_TCTRL_BASE + TCTRL_COORD) >> 16) == 0);
 
+  // GRID: we are inside the compute grid, the I/O tile is in the row below it
+  CHECK(grid_nx() >= 1 && grid_ny() >= 1 && me.x < grid_nx() && me.y < grid_ny());
+  CHECK(io_xy().x == 0 && io_xy().y == grid_ny());
+
   // CTRL reads back run = 1 while we execute
   CHECK(mmio_read(TILE_TCTRL_BASE + TCTRL_CTRL) == 1);
 

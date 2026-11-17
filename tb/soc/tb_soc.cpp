@@ -134,7 +134,7 @@ extern "C" void torus_rvfi_retire(int hart, long long order, int pc_rdata, int p
 // ----------------------------------------------------------- backdoor
 static svScope bank_scope(int n, int b) {
   std::string name = "TOP.tb_soc_top.u_soc.g_y[" + std::to_string(n / kNX) + "].g_x[" + std::to_string(n % kNX) +
-                     "].u_tile.u_spm.g_bank[" + std::to_string(b) + "].u_bank";
+                     "].g_tile.u_tile.u_spm.g_bank[" + std::to_string(b) + "].u_bank";
   svScope s = svGetScopeFromName(name.c_str());
   if (!s) {
     fprintf(stderr, "no DPI scope %s\n", name.c_str());

@@ -20,6 +20,7 @@ module niu
 #(
   parameter int unsigned GX         = 2,
   parameter int unsigned GY         = 2,
+  parameter bit          IO_ROW     = 1'b0,  // row GY-1 is the I/O row: only (0, GY-1) has an NIU
   parameter int unsigned DEPTH      = 5,   // router input buffers, and this ejection buffer
   parameter int unsigned STAGE      = 4    // TX staging buffer between scratchpad and injection
 ) (
@@ -85,6 +86,7 @@ module niu
     if (c.src[3:0] != '0 || c.dst_addr[3:0] != '0 || c.len[3:0] != '0) return 1'b1;
     if (c.len > SPM_BYTES || c.src > SPM_BYTES - c.len) return 1'b1;
     if (c.dst_xy[31:16] != '0 || c.dst_xy[15:8] >= 8'(GY) || c.dst_xy[7:0] >= 8'(GX)) return 1'b1;
+    if (IO_ROW && c.dst_xy[15:8] == 8'(GY - 1) && c.dst_xy[7:0] != '0) return 1'b1;  // router-only stop
     return ch > NCH;  // never
   endfunction
 

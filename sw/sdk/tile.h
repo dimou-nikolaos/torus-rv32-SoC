@@ -22,6 +22,7 @@ extern "C" {
 #define TCTRL_CYCLE_LO  0x08
 #define TCTRL_CYCLE_HI  0x0C
 #define TCTRL_DOORBELL  0x10
+#define TCTRL_GRID      0x14   // compute NX [7:0], NY [15:8], I/O tile x [23:16], y [31:24]
 
 #define CONSOLE_TX      0x00
 #define CONSOLE_EXIT    0x04
@@ -79,6 +80,26 @@ typedef struct { uint8_t x, y; } xy_t;
 static inline xy_t my_xy(void) {
   uint32_t c = mmio_read(TILE_TCTRL_BASE + TCTRL_COORD);
   xy_t r = {(uint8_t)(c & 0xff), (uint8_t)((c >> 8) & 0xff)};
+  return r;
+}
+
+// The compute grid is NX x NY at router coordinates x in [0, NX), y in [0, NY);
+// the I/O row (y = NY) holds the I/O tile and router-only stops.
+static inline uint32_t tile_grid(void) { return mmio_read(TILE_TCTRL_BASE + TCTRL_GRID); }
+static inline unsigned grid_nx(void) { return tile_grid() & 0xff; }
+static inline unsigned grid_ny(void) { return (tile_grid() >> 8) & 0xff; }
+
+static inline xy_t io_xy(void) {
+  uint32_t g = tile_grid();
+  xy_t r = {(uint8_t)((g >> 16) & 0xff), (uint8_t)(g >> 24)};
+  return r;
+}
+
+// Compute tile index n = y * NX + x, and back
+static inline unsigned tile_index(xy_t t) { return t.y * grid_nx() + t.x; }
+static inline xy_t tile_at(unsigned n) {
+  unsigned nx = grid_nx();
+  xy_t r = {(uint8_t)(n % nx), (uint8_t)(n / nx)};
   return r;
 }
 
@@ -146,7 +167,6 @@ void sem_inc(xy_t dst, uint32_t sem_addr, uint32_t n);
 void sem_wait(volatile uint32_t *sem, uint32_t value);
 void noc_fence(xy_t dst);
 xy_t neighbor(int dx, int dy);
-xy_t io_xy(void);
 
 // Kernel entry, called by crt0 with the mailbox address.
 typedef struct args args_t;

@@ -228,11 +228,11 @@ NIU registers, per DMA channel (start with 2 channels; channel n starts at 0x100
 | `0x08` | `DST_XY` | Remote tile, x in `[7:0]`, y in `[15:8]`; only the low 4 bits of each field reach the flit, the upper bits must be zero |
 | `0x0C` | `LEN` | Bytes, multiple of 16 |
 | `0x10` | `CMD` | Write starts: op (WRITE, READ\_REQ, ATOMIC\_INC), plane (AUTO, or forced NoC0/NoC1 for tests only), arg |
-| `0x14` | `STATUS` | Busy bit, completed-command counter, error bit (misaligned, coordinate outside the grid, nonzero upper bits, READ\_REQ on channel 1) |
+| `0x14` | `STATUS` | Busy bit, completed-command counter, error bit (misaligned, coordinate outside the grid or at a router-only stop, nonzero upper bits, READ\_REQ on channel 1) |
 
 DMA moves whole flits: every DMA flit has all 16 byte enables set. Sub-16-byte writes come only from the I/O bridge (AXI byte strobes). A command with an error does not start; it sets the error bit and counts as completed so `dma_wait` cannot hang.
 
-Tile control registers: `COORD` (read-only own x, y), `CTRL` (bit 0 = run; the host clears it to hold the core in reset), `CYCLE` (free-running counter), `DOORBELL` (set by an incoming ATOMIC\_INC to a watched address; lets the core use `wfi` later instead of polling).
+Tile control registers: `COORD` (read-only own x, y), `GRID` (read-only: compute NX and NY, I/O tile x and y, one byte each), `CTRL` (bit 0 = run; the host clears it to hold the core in reset), `CYCLE` (free-running counter), `DOORBELL` (set by an incoming ATOMIC\_INC to a watched address; lets the core use `wfi` later instead of polling).
 
 Counter bank: ten 48-bit counters that count only while `CTRL.run` is set. Counters 0 and 1 are fixed (cycles, retired instructions); counters 2 to 9 each count the event named by their select register at `+0x400 + 4k`, any of the tile's events (stalls, arbiter denials and promotions per port, NIU flits and errors, router flits, credit stalls, arbitration losses and bubble-rule holds per port). After reset the selects pick fetch stalls, data stalls, NIU flits sent, received and dropped, and the router's three output flit counts. Counter *i* is at `+8i` (live; reading the low word latches the high word, so low-then-high is one consistent value) and at `+0x800 + 8i` (snapshot). `+0xFF0` returns the number of counters, `+0xFF8` the number of events. `PERF_CMD` (`+0xFF4`, write-only) bit 0 copies every counter into the snapshot view in the same cycle, and bit 1 clears every live counter. Both bits in one write capture the totals and restart from zero. Selects and `PERF_CMD` are writable from the local core and remotely; the counters themselves are read-only. Collecting more than eight events per kernel takes several runs or a rotating selection; that is the price of a bank about a quarter the size of one counter per event.
 
@@ -520,7 +520,7 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 
 - [ ] C++ AXI bus functional model through DPI → burst write and read test against a memory model
 - [ ] Async CDC FIFO → randomized clock-ratio test passes, no loss or duplication
-- [ ] I/O row in the grid generator (router-only stops, I/O tile at (0, NY)) → grid elaborates, `compute_grid()` excludes the row
+- [x] I/O row in the grid generator (router-only stops, I/O tile at (0, NY)) → grid elaborates, `compute_grid()` excludes the row (tile control `GRID` register; DMA to a router-only stop is a command error)
 - [ ] AXI-to-NoC bridge with burst splitting, byte strobes, `IO_RD_OUTSTANDING` and backpressure → host write lands in any tile's scratchpad
 - [ ] I/O tile assembled (AXI front-end, FIFO, bridge, NIU) → I/O tile testbench passes
 - [ ] C++ remote read and write API → unit test passes

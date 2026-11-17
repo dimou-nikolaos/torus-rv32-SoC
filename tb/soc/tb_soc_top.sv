@@ -42,9 +42,9 @@ module tb_soc_top #(
       // RVFI lives in the vendor simulation wrapper (rtl/core/core_wrap.sv).
       // Only while the core runs; the C++ side also ignores the initialization
       // trigger of --x-initial-edge.
-      `define RVFI u_soc.g_y[y].g_x[x].u_tile.u_core.u_cv32.rvfi_i
+      `define RVFI u_soc.g_y[y].g_x[x].g_tile.u_tile.u_core.u_cv32.rvfi_i
       always_ff @(posedge clk_i)
-        if (u_soc.g_y[y].g_x[x].u_tile.run && `RVFI.rvfi_valid)
+        if (u_soc.g_y[y].g_x[x].g_tile.u_tile.run && `RVFI.rvfi_valid)
           torus_rvfi_retire(
             y * 16 + x,
             `RVFI.rvfi_order,

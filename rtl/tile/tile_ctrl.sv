@@ -1,9 +1,14 @@
-// Tile control registers (SPEC.md, Tile memory map): COORD, CTRL, CYCLE, DOORBELL.
-// Two register ports: the local core and the remote side (testbench at M0, NIU
-// from M1). On a same-cycle write to the same register the remote side wins.
+// Tile control registers (SPEC.md, Tile memory map): COORD, CTRL, CYCLE,
+// DOORBELL, GRID. Two register ports: the local core and the remote side (the
+// NIU). On a same-cycle write to the same register the remote side wins.
 module tile_ctrl
   import tile_pkg::*;
-(
+#(
+  parameter int unsigned NX   = 1,   // compute grid, for GRID
+  parameter int unsigned NY   = 1,
+  parameter int unsigned IO_X = 0,   // the I/O tile
+  parameter int unsigned IO_Y = 1
+) (
   input  logic        clk_i,
   input  logic        rst_ni,
   input  logic [3:0]  coord_x_i,
@@ -12,7 +17,7 @@ module tile_ctrl
   output reg_rsp_t    core_rsp_o,
   input  reg_req_t    rmt_req_i,
   output reg_rsp_t    rmt_rsp_o,
-  input  logic        doorbell_set_i,   // from the NIU (M2)
+  input  logic        doorbell_set_i,   // from the NIU (ATOMIC_INC with the doorbell flag)
   output logic        run_o,
   output logic [63:0] cycle_o
 );
@@ -40,9 +45,10 @@ module tile_ctrl
         12'(TCTRL_CYCLE_LO): rdata[p] = cycle_q[31:0];
         12'(TCTRL_CYCLE_HI): rdata[p] = hi_shadow_q[p];
         12'(TCTRL_DOORBELL): rdata[p] = {31'h0, doorbell_q};
+        12'(TCTRL_GRID):     rdata[p] = {8'(IO_Y), 8'(IO_X), 8'(NY), 8'(NX)};
         default:             err[p]   = 1'b1;
       endcase
-      if (req[p].we && req[p].addr inside {12'(TCTRL_COORD), 12'(TCTRL_CYCLE_LO), 12'(TCTRL_CYCLE_HI)})
+      if (req[p].we && req[p].addr inside {12'(TCTRL_COORD), 12'(TCTRL_CYCLE_LO), 12'(TCTRL_CYCLE_HI), 12'(TCTRL_GRID)})
         err[p] = 1'b1;   // read-only
     end
 

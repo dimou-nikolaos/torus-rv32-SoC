@@ -25,6 +25,7 @@ package tile_pkg;
   localparam logic [7:0] TCTRL_CYCLE_LO = 8'h08;  // RO
   localparam logic [7:0] TCTRL_CYCLE_HI = 8'h0C;  // RO, latched when CYCLE_LO is read
   localparam logic [7:0] TCTRL_DOORBELL = 8'h10;  // write 1s to clear
+  localparam logic [7:0] TCTRL_GRID     = 8'h14;  // RO: compute NX [7:0], NY [15:8], I/O tile x [23:16], y [31:24]
 
   // Console registers (simulation only)
   localparam logic [7:0] CONSOLE_TX     = 8'h00;  // write: one character

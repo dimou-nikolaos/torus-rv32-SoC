@@ -10,9 +10,11 @@ module tile_top
   import noc_pkg::*;
 #(
   parameter int unsigned STARVE_LIMIT = 4,
-  parameter int unsigned GX           = 1,    // NoC ring lengths
-  parameter int unsigned GY           = 1,
+  parameter int unsigned NX           = 1,    // compute grid; the router grid adds the I/O row
+  parameter int unsigned NY           = 1,
   parameter int unsigned LINK_SLICE   = 0,
+  localparam int unsigned GX          = NX,   // NoC ring lengths
+  localparam int unsigned GY          = NY + 1,
   localparam int unsigned DEPTH       = credit_rtt(LINK_SLICE) + 1
 ) (
   input  logic        clk_i,
@@ -145,7 +147,7 @@ module tile_top
   logic [31:0] niu_rmt_addr, niu_rmt_wdata;
   logic  ev_tx, ev_rx, ev_err;
 
-  niu #(.GX(GX), .GY(GY), .DEPTH(DEPTH)) u_niu (
+  niu #(.GX(GX), .GY(GY), .IO_ROW(1'b1), .DEPTH(DEPTH)) u_niu (
     .clk_i, .rst_ni, .x_i(coord_t'(coord_x_i)), .y_i(coord_t'(coord_y_i)),
     .reg_req_i(niu_req), .reg_rsp_o(niu_rsp),
     .tx_spm_req_o(spm_req[PORT_TXDMA]), .tx_spm_rsp_i(spm_rsp[PORT_TXDMA]),
@@ -219,7 +221,7 @@ module tile_top
 
   // ------------------------------------------------------- register blocks
   logic [63:0] cycle;
-  tile_ctrl u_tctrl (
+  tile_ctrl #(.NX(NX), .NY(NY), .IO_X(0), .IO_Y(NY)) u_tctrl (
     .clk_i, .rst_ni, .coord_x_i, .coord_y_i,
     .core_req_i(tctrl_req), .core_rsp_o(tctrl_rsp),
     .rmt_req_i (rmt_tctrl_req),        .rmt_rsp_o (rmt_tctrl_rsp),

@@ -90,6 +90,14 @@ int kernel_main(const args_t *args) {
       return 100 + (int)i;
     }
   }
+  // A router-only stop in the I/O row has no NIU
+  if (grid_nx() > 1) {
+    uint32_t before = NIU_STATUS_DONE(niu_status(0));
+    xy_t stop = {(uint8_t)(grid_nx() - 1), (uint8_t)grid_ny()};
+    dma_write(0, (uint32_t)src_b, stop, (uint32_t)dst_b, 16);
+    uint32_t s = niu_status(0);
+    CHECK((s & NIU_STATUS_ERROR) && NIU_STATUS_DONE(s) == ((before + 1) & 0xffff));
+  }
   // A good command clears the error bit
   dma_write(0, (uint32_t)src_b, me, (uint32_t)dst_b, 16);
   dma_wait(0);
