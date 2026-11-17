@@ -1,27 +1,43 @@
-// Compute tile, M0 subset: core, scratchpad with the full seven-port arbiter,
-// tile control, counter bank and console. NIU and engine ports of the arbiter
-// are present and tied off until M1 and M5.
+// Compute tile, M1: core, scratchpad with the seven-port arbiter, tile control,
+// counter bank, console, NIU and the NoC0 router. The engine port of the
+// arbiter is tied off until M5; NoC1 arrives in M3.
 //
-// The remote register port (rmt_*) reaches tile control and the counter bank;
-// the testbench drives it at M0 and the NIU from M1. Its address is a local
-// byte address in the MMIO range.
+// Remote register accesses to tile control and the counter bank come from the
+// NIU (WRITE flits). Until the I/O tile exists (M2), the testbench also has a
+// register port here (tb_*), used only while the NoC is quiet.
 module tile_top
   import tile_pkg::*;
+  import noc_pkg::*;
 #(
-  parameter int unsigned STARVE_LIMIT = 4
+  parameter int unsigned STARVE_LIMIT = 4,
+  parameter int unsigned GX           = 1,    // NoC ring lengths
+  parameter int unsigned GY           = 1,
+  parameter int unsigned LINK_SLICE   = 0,
+  localparam int unsigned DEPTH       = credit_rtt(LINK_SLICE) + 1
 ) (
   input  logic        clk_i,
   input  logic        rst_ni,
   input  logic [3:0]  coord_x_i,
   input  logic [3:0]  coord_y_i,
 
-  input  logic        rmt_req_i,
-  input  logic        rmt_we_i,
-  input  logic [31:0] rmt_addr_i,
-  input  logic [31:0] rmt_wdata_i,
-  output logic        rmt_rvalid_o,
-  output logic        rmt_err_o,
-  output logic [31:0] rmt_rdata_o
+  // NoC0 ring ports: X ring and Y ring, in and out
+  input  link_t       x_in_i,
+  output logic        x_in_credit_o,
+  output link_t       x_out_o,
+  input  logic        x_out_credit_i,
+  input  link_t       y_in_i,
+  output logic        y_in_credit_o,
+  output link_t       y_out_o,
+  input  logic        y_out_credit_i,
+
+  // Testbench register port (M1 scaffolding, removed in M2)
+  input  logic        tb_req_i,
+  input  logic        tb_we_i,
+  input  logic [31:0] tb_addr_i,
+  input  logic [31:0] tb_wdata_i,
+  output logic        tb_rvalid_o,
+  output logic        tb_err_o,
+  output logic [31:0] tb_rdata_o
 );
   // ------------------------------------------------------------------ core
   logic        run;
@@ -54,11 +70,10 @@ module tile_top
   spm_rsp_t spm_rsp [SPM_PORTS];
   logic [SPM_PORTS-1:0] spm_denied, spm_promoted;
 
-  for (genvar p = 0; p < SPM_PORTS; p++) begin : g_unused_port
-    if (p != PORT_CORE_I && p != PORT_CORE_D) begin : g_tie
-      assign spm_req[p] = '0;   // NIU (M1) and engine (M5)
-    end
-  end
+  // Engine (M5), NoC1 receive and the reply engine (M2/M3) are not connected yet
+  assign spm_req[PORT_ENGINE] = '0;
+  assign spm_req[PORT_RX1]    = '0;
+  assign spm_req[PORT_TXREP]  = '0;
 
   spm_banks #(.STARVE_LIMIT(STARVE_LIMIT)) u_spm (
     .clk_i, .rst_ni, .req_i(spm_req), .rsp_o(spm_rsp),
@@ -101,8 +116,8 @@ module tile_top
     .spm_req_o(spm_req[PORT_CORE_D]), .spm_rsp_i(spm_rsp[PORT_CORE_D])
   );
 
-  reg_req_t tctrl_req, perf_req, console_req;
-  reg_rsp_t tctrl_rsp, perf_rsp, console_rsp;
+  reg_req_t tctrl_req, perf_req, console_req, niu_req;
+  reg_rsp_t tctrl_rsp, perf_rsp, console_rsp, niu_rsp;
   function automatic reg_req_t mmio_sel(mmio_region_e r);
     return '{req: data_req && d_mmio && d_region == r, we: data_we,
              addr: data_addr[11:0], be: data_be, wdata: data_wdata};
@@ -110,36 +125,97 @@ module tile_top
   assign tctrl_req   = mmio_sel(MMIO_TCTRL);
   assign perf_req    = mmio_sel(MMIO_PERF);
   assign console_req = mmio_sel(MMIO_CONSOLE);
+  assign niu_req     = mmio_sel(MMIO_NIU);
 
   logic bad_q;
   always_ff @(posedge clk_i or negedge rst_ni)
     if (!rst_ni) bad_q <= 1'b0;
-    else         bad_q <= data_req && (d_bad || d_mmio && d_region == MMIO_NIU);
-  // NIU registers arrive in M1; until then that region answers with an error.
+    else         bad_q <= data_req && d_bad;
 
   assign data_gnt    = d_spm ? dspm_gnt : data_req;
-  assign data_rvalid = dspm_rvalid || bad_q || tctrl_rsp.rvalid || perf_rsp.rvalid || console_rsp.rvalid;
-  assign data_err    = bad_q || tctrl_rsp.err || perf_rsp.err || console_rsp.err;
-  assign data_rdata  = dspm_rvalid ? dspm_rdata : tctrl_rsp.rdata | perf_rsp.rdata;
+  assign data_rvalid = dspm_rvalid || bad_q || tctrl_rsp.rvalid || perf_rsp.rvalid || console_rsp.rvalid
+                     || niu_rsp.rvalid;
+  assign data_err    = bad_q || tctrl_rsp.err || perf_rsp.err || console_rsp.err || niu_rsp.err;
+  assign data_rdata  = dspm_rvalid ? dspm_rdata : tctrl_rsp.rdata | perf_rsp.rdata | niu_rsp.rdata;
+
+  // ------------------------------------------------------------ NIU, router
+  link_t inj, ej;
+  logic  inj_credit, ej_credit;
+  logic  niu_rmt_req;
+  logic [31:0] niu_rmt_addr, niu_rmt_wdata;
+  logic  ev_tx, ev_rx, ev_err;
+
+  niu #(.GX(GX), .GY(GY), .DEPTH(DEPTH)) u_niu (
+    .clk_i, .rst_ni, .x_i(coord_t'(coord_x_i)), .y_i(coord_t'(coord_y_i)),
+    .reg_req_i(niu_req), .reg_rsp_o(niu_rsp),
+    .tx_spm_req_o(spm_req[PORT_TXDMA]), .tx_spm_rsp_i(spm_rsp[PORT_TXDMA]),
+    .rx_spm_req_o(spm_req[PORT_RX0]),   .rx_spm_rsp_i(spm_rsp[PORT_RX0]),
+    .rmt_req_o(niu_rmt_req), .rmt_addr_o(niu_rmt_addr), .rmt_wdata_o(niu_rmt_wdata),
+    .inj_o(inj), .inj_credit_i(inj_credit), .ej_i(ej), .ej_credit_o(ej_credit),
+    .ev_tx_flit_o(ev_tx), .ev_rx_flit_o(ev_rx), .ev_error_o(ev_err)
+  );
+
+  link_t r_in [NPORTS], r_out [NPORTS];
+  logic  r_cr_out [NPORTS], r_cr_in [NPORTS];
+  logic [NPORTS-1:0] r_ev_flit, r_ev_cstall, r_ev_bhold, r_ev_bubble, r_ev_arbloss;
+  assign r_in[IL] = inj;
+  assign r_in[IX] = x_in_i;
+  assign r_in[IY] = y_in_i;
+  assign inj_credit    = r_cr_out[IL];
+  assign x_in_credit_o = r_cr_out[IX];
+  assign y_in_credit_o = r_cr_out[IY];
+  assign ej      = r_out[IL];
+  assign x_out_o = r_out[IX];
+  assign y_out_o = r_out[IY];
+  assign r_cr_in[IL] = ej_credit;
+  assign r_cr_in[IX] = x_out_credit_i;
+  assign r_cr_in[IY] = y_out_credit_i;
+
+  noc_router #(.DIR(1'b0), .GX(GX), .GY(GY), .DEPTH(DEPTH), .LINK_SLICE(LINK_SLICE)) u_r0 (
+    .clk_i, .rst_ni, .x_i(coord_t'(coord_x_i)), .y_i(coord_t'(coord_y_i)),
+    .in_i(r_in), .credit_o(r_cr_out), .out_o(r_out), .credit_i(r_cr_in),
+    .ev_flit_o(r_ev_flit), .ev_credit_stall_o(r_ev_cstall), .ev_bubble_hold_o(r_ev_bhold),
+    .ev_bubble_o(r_ev_bubble), .ev_arb_loss_o(r_ev_arbloss)
+  );
 
   // ----------------------------------------------------------- remote port
+  // Remote accesses from the NIU (write-only) and from the testbench (M1).
+  logic        rmt_req, rmt_we;
+  logic [31:0] rmt_addr, rmt_wdata;
+  assign rmt_req   = niu_rmt_req || tb_req_i;
+  assign rmt_we    = niu_rmt_req ? 1'b1 : tb_we_i;
+  assign rmt_addr  = niu_rmt_req ? niu_rmt_addr : tb_addr_i;
+  assign rmt_wdata = niu_rmt_req ? niu_rmt_wdata : tb_wdata_i;
+
   reg_req_t rmt_tctrl_req, rmt_perf_req;
   reg_rsp_t rmt_tctrl_rsp, rmt_perf_rsp;
-  logic     rmt_hit_tctrl, rmt_hit_perf, rmt_bad_q;
-  assign rmt_hit_tctrl = rmt_addr_i[31:12] == TCTRL_BASE[31:12];
-  assign rmt_hit_perf  = rmt_addr_i[31:12] == PERF_BASE[31:12];
+  logic     rmt_hit_tctrl, rmt_hit_perf, rmt_bad_q, tb_q;
+  assign rmt_hit_tctrl = rmt_addr[31:12] == TCTRL_BASE[31:12];
+  assign rmt_hit_perf  = rmt_addr[31:12] == PERF_BASE[31:12];
   always_comb begin
-    rmt_tctrl_req       = '{req: rmt_req_i && rmt_hit_tctrl, we: rmt_we_i, addr: rmt_addr_i[11:0], be: 4'hF, wdata: rmt_wdata_i};
+    rmt_tctrl_req       = '{req: rmt_req && rmt_hit_tctrl, we: rmt_we, addr: rmt_addr[11:0], be: 4'hF, wdata: rmt_wdata};
     rmt_perf_req        = rmt_tctrl_req;
-    rmt_perf_req.req    = rmt_req_i && rmt_hit_perf;
+    rmt_perf_req.req    = rmt_req && rmt_hit_perf;
   end
   always_ff @(posedge clk_i or negedge rst_ni)
-    if (!rst_ni) rmt_bad_q <= 1'b0;
-    else         rmt_bad_q <= rmt_req_i && !rmt_hit_tctrl && !rmt_hit_perf;
+    if (!rst_ni) begin
+      rmt_bad_q <= 1'b0;
+      tb_q      <= 1'b0;
+    end else begin
+      rmt_bad_q <= rmt_req && !rmt_hit_tctrl && !rmt_hit_perf;
+      tb_q      <= tb_req_i && !niu_rmt_req;
+    end
 
-  assign rmt_rvalid_o = rmt_tctrl_rsp.rvalid || rmt_perf_rsp.rvalid || rmt_bad_q;
-  assign rmt_err_o    = rmt_tctrl_rsp.err || rmt_perf_rsp.err || rmt_bad_q;
-  assign rmt_rdata_o  = rmt_tctrl_rsp.rdata | rmt_perf_rsp.rdata;
+  // Responses go to the testbench only (NIU writes are posted)
+  assign tb_rvalid_o = tb_q;
+  assign tb_err_o    = tb_q && (rmt_tctrl_rsp.err || rmt_perf_rsp.err || rmt_bad_q);
+  assign tb_rdata_o  = rmt_tctrl_rsp.rdata | rmt_perf_rsp.rdata;
+
+`ifndef SYNTHESIS
+  always_ff @(posedge clk_i or negedge rst_ni)
+    if (rst_ni) assert (!(tb_req_i && niu_rmt_req))
+      else $error("tile_top (%0d,%0d): testbench register access collided with a NoC write", coord_x_i, coord_y_i);
+`endif
 
   // ------------------------------------------------------- register blocks
   logic [63:0] cycle;
@@ -159,6 +235,13 @@ module tile_top
     perf_ev[PC_DATA_STALL]  = ev_data_stall;
     perf_ev[PC_DENIED_0   +: SPM_PORTS] = spm_denied;
     perf_ev[PC_PROMOTED_0 +: SPM_PORTS] = spm_promoted;
+    perf_ev[PC_NIU_TX]                  = ev_tx;
+    perf_ev[PC_NIU_RX]                  = ev_rx;
+    perf_ev[PC_NIU_ERR]                 = ev_err;
+    perf_ev[PC_R0_FLIT    +: NPORTS]    = r_ev_flit;
+    perf_ev[PC_R0_CSTALL  +: NPORTS]    = r_ev_cstall;
+    perf_ev[PC_R0_ARBLOSS +: NPORTS]    = r_ev_arbloss;
+    perf_ev[PC_R0_BHOLD   +: NPORTS]    = r_ev_bhold;
   end
 
   counter_bank #(.N(PC_NUM)) u_perf (
@@ -174,7 +257,8 @@ module tile_top
 
   /* verilator lint_off UNUSEDSIGNAL */
   logic unused;
-  assign unused = ^{cycle, core_sleep, console_rsp.rdata, data_addr[13:12] == 2'b00 && d_mmio};
+  assign unused = ^{cycle, core_sleep, console_rsp.rdata, data_addr[13:12] == 2'b00 && d_mmio, r_ev_bubble,
+                    rmt_tctrl_rsp.rvalid, rmt_perf_rsp.rvalid};
   /* verilator lint_on UNUSEDSIGNAL */
 
 endmodule

@@ -32,8 +32,16 @@ enum {
   PERF_RETIRED = 1,
   PERF_FETCH_STALL = 2,
   PERF_DATA_STALL = 3,
-  PERF_DENIED_0 = 4,
-  PERF_PROMOTED_0 = 11,
+  PERF_DENIED_0 = 4,     // 4..10 per arbiter port
+  PERF_PROMOTED_0 = 11,  // 11..17 per arbiter port
+  PERF_NIU_TX = 18,
+  PERF_NIU_RX = 19,
+  PERF_NIU_ERR = 20,
+  PERF_R0_FLIT = 21,     // 21..23 NoC0 router flits per output (L, X, Y)
+  PERF_R0_CSTALL = 24,   // 24..26 per output: waiting, no credit
+  PERF_R0_ARBLOSS = 27,  // 27..29 per input: lost arbitration
+  PERF_R0_BHOLD = 30,    // 30..32 per output: entering flit held by the bubble rule
+  PERF_NUM_COUNTERS = 33,
   PERF_SNAP_BASE = 0x800,
   PERF_NUM_OFFSET = 0xFF0,
   PERF_CMD_OFFSET = 0xFF4,
@@ -82,10 +90,30 @@ static inline void console_putc(char c) { mmio_write(TILE_CONSOLE_BASE + CONSOLE
 void console_puts(const char *s);
 void tile_exit(int code) __attribute__((noreturn));
 
-// ------------------------------------------------- NoC (M1 and later)
+// ------------------------------------------------------------------ NoC
+// NIU registers, per DMA channel (SPEC.md, Tile memory map and NIU registers)
+#define NIU_CH(c)      (TILE_NIU_BASE + 0x20u * (uint32_t)(c))
+#define NIU_SRC        0x00
+#define NIU_DST_ADDR   0x04
+#define NIU_DST_XY     0x08
+#define NIU_LEN        0x0C
+#define NIU_CMD        0x10
+#define NIU_STATUS     0x14
+#define NIU_OP_WRITE   0u
+#define NIU_OP_READ_REQ 1u
+#define NIU_OP_ATOMIC_INC 2u
+#define NIU_STATUS_BUSY  (1u << 0)
+#define NIU_STATUS_ERROR (1u << 1)
+#define NIU_STATUS_DONE(s) ((s) >> 16)   // completed commands, modulo 2^16
+
+static inline uint32_t niu_status(int ch) { return mmio_read(NIU_CH(ch) + NIU_STATUS); }
+
+// M1: dma_write and dma_wait. The rest arrives with the NIU features in M2/M3.
+// dma_write: src, dst_addr and len multiples of 16; returns at once, the
+// channel stays busy until every flit has been injected.
 void dma_write(int ch, uint32_t src, xy_t dst, uint32_t dst_addr, uint32_t len);
 void dma_read(xy_t src, uint32_t src_addr, uint32_t dst, uint32_t len);  // channel 0
-void dma_wait(int ch);
+void dma_wait(int ch);   // until the channel's command has finished (writes: injected)
 void sem_inc(xy_t dst, uint32_t sem_addr, uint32_t n);
 void sem_wait(volatile uint32_t *sem, uint32_t value);
 void noc_fence(xy_t dst);

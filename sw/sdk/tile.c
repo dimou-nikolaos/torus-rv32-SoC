@@ -6,6 +6,20 @@
 
 #include "tile.h"
 
+void dma_write(int ch, uint32_t src, xy_t dst, uint32_t dst_addr, uint32_t len) {
+  uint32_t base = NIU_CH(ch);
+  mmio_write(base + NIU_SRC, src);
+  mmio_write(base + NIU_DST_ADDR, dst_addr);
+  mmio_write(base + NIU_DST_XY, (uint32_t)dst.x | (uint32_t)dst.y << 8);
+  mmio_write(base + NIU_LEN, len);
+  mmio_write(base + NIU_CMD, NIU_OP_WRITE);
+}
+
+void dma_wait(int ch) {
+  while (niu_status(ch) & NIU_STATUS_BUSY) {
+  }
+}
+
 void console_puts(const char *s) {
   while (*s) console_putc(*s++);
 }

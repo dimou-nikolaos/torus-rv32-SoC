@@ -42,8 +42,9 @@ struct RvfiRecord {
 class SpikeCosim : public simif_t {
  public:
   // isa: e.g. "rv32im_zicsr_zifencei". spm_bytes: scratchpad mirror size.
-  // check_spm_loads: also compare scratchpad loads with the mirror (valid while
-  // the core is the only writer, i.e. M0).
+  // check_spm_loads: also compare scratchpad loads with the mirror. Only valid
+  // when the core is the only writer and never reads bytes it did not write
+  // first (the scratchpad powers up random); the SoC testbench leaves it off.
   SpikeCosim(const std::string& isa, uint32_t start_pc, uint32_t hartid, uint32_t spm_bytes,
              bool check_spm_loads);
   ~SpikeCosim() override;

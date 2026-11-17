@@ -1,2 +1,4 @@
 torus_tile_program(hello SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/hello/hello.c)
 torus_tile_program(regtest SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/regtest/regtest.c)
+torus_tile_program(dmatest SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/dmatest/dmatest.c)
+torus_tile_program(pingpong SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/pingpong/pingpong.c)

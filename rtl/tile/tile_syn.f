@@ -1,6 +1,8 @@
 // Compute tile for synthesis (SYNTHESIS defined by the flow) (paths relative to repo root)
 -f rtl/core/core_syn.f
 rtl/pkg/tile_pkg.sv
+-f rtl/noc/noc.f
+rtl/tile/niu.sv
 rtl/tile/reg_rsp_stage.sv
 rtl/tile/spm_bank.sv
 rtl/tile/spm_arbiter.sv

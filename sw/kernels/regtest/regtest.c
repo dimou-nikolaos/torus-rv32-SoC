@@ -14,9 +14,9 @@
 
 static volatile int expect_fault;
 
-// The last check provokes a bus error: a load from the NIU region, which has no
-// registers before M1. CV32E40X reports data bus errors as an NMI with
-// mcause = interrupt | 1024 (load bus fault).
+// The last check provokes a bus error: a load from an unmapped MMIO address.
+// CV32E40X reports data bus errors as an NMI with mcause = interrupt | 1024
+// (load bus fault).
 void tile_trap_handler(uint32_t mcause, uint32_t mepc, uint32_t mtval) {
   (void)mepc;
   (void)mtval;
@@ -51,7 +51,7 @@ int kernel_main(const args_t *args) {
   CHECK(mmio_read(TILE_TCTRL_BASE + TCTRL_DOORBELL) == 0);
 
   // Counter bank: count, monotonic counters, retired <= cycles
-  CHECK(perf_count() == 18);
+  CHECK(perf_count() == PERF_NUM_COUNTERS);
   CHECK(mmio_read(TILE_PERF_BASE + PERF_CMD_OFFSET) == 0);
   uint64_t r0 = perf_read(PERF_RETIRED), y0 = perf_read(PERF_CYCLES);
   for (volatile int i = 0; i < 50; i++) {
@@ -83,7 +83,7 @@ int kernel_main(const args_t *args) {
 
   printf("registers OK (tile %u,%u, %lu instructions so far)\n", me.x, me.y, (unsigned long)r1);
   expect_fault = 1;
-  (void)mmio_read(TILE_NIU_BASE);
-  printf("FAIL: NIU region load did not fault\n");
+  (void)mmio_read(0x10004000u);
+  printf("FAIL: unmapped MMIO load did not fault\n");
   return 1;
 }

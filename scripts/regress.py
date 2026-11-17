@@ -64,9 +64,14 @@ def discover(args):
     tests.append(Test("lint.router_too_shallow", lint + [
         "--top-module", "noc_router", "-GLINK_SLICE=1", "-GDEPTH=6",
         "-f", "rtl/noc/noc.f"], seeded=False, expect_fail=True))
-    tb = str(BUILD / "tb/soc/tb_tile")
+    tb = str(BUILD / "tb/soc/tb_soc_1x1")
     tests.append(Test("tile.hello", [tb, str(BUILD / "sw/hello.elf")]))
-    tests.append(Test("tile.regtest", [tb, str(BUILD / "sw/regtest.elf"), "--coord=3,5"]))
+    tests.append(Test("tile.regtest", [tb, str(BUILD / "sw/regtest.elf")]))
+    tests.append(Test("tile.dmatest", [tb, str(BUILD / "sw/dmatest.elf")]))
+    soc22 = str(BUILD / "tb/soc/tb_soc_2x2")
+    tests.append(Test("soc2x2.pingpong", [soc22, str(BUILD / "sw/pingpong.elf")]))
+    tests.append(Test("soc2x2.dmatest", [soc22, str(BUILD / "sw/dmatest.elf")]))
+    tests.append(Test("soc2x2.hello", [soc22, str(BUILD / "sw/hello.elf")]))
     for elf in sorted((BUILD / "sw/isa").glob("*.elf")):
         tests.append(Test(f"isa.{elf.stem}", [tb, str(elf)]))
     if args.synth:

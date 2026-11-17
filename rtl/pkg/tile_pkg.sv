@@ -97,7 +97,14 @@ package tile_pkg;
     PC_DATA_STALL  = 3,   // WB stalled on a data access
     PC_DENIED_0    = 4,   // 4..10: arbiter denials per port
     PC_PROMOTED_0  = 4 + SPM_PORTS,  // 11..17: grants through promotion per port
-    PC_NUM         = 4 + 2 * SPM_PORTS
+    PC_NIU_TX      = 4 + 2 * SPM_PORTS,      // 18: flits injected by the NIU
+    PC_NIU_RX      = 5 + 2 * SPM_PORTS,      // 19: flits retired by the NIU
+    PC_NIU_ERR     = 6 + 2 * SPM_PORTS,      // 20: flits dropped (unsupported op or address)
+    PC_R0_FLIT     = 7 + 2 * SPM_PORTS,      // 21..23: NoC0 router flits per output (L, X, Y)
+    PC_R0_CSTALL   = 10 + 2 * SPM_PORTS,     // 24..26: per output, waiting with no credit
+    PC_R0_ARBLOSS  = 13 + 2 * SPM_PORTS,     // 27..29: per input, eligible but lost arbitration
+    PC_R0_BHOLD    = 16 + 2 * SPM_PORTS,     // 30..32: per output, entering flit held by the bubble rule
+    PC_NUM         = 19 + 2 * SPM_PORTS
   } perf_counter_e;
   localparam logic [11:0] PERF_SNAP_BASE    = 12'h800;
   localparam logic [11:0] PERF_NUM_OFFSET   = 12'hFF0;
