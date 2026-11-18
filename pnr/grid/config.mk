@@ -13,3 +13,12 @@ PNR_DIR = $(dir $(DESIGN_CONFIG))
 # on met5, which this study (wires and timing between tiles) leaves unconnected
 export PDN_TCL = $(PNR_DIR)pdn.tcl
 export PLACE_DENSITY ?= 0.30
+
+# The fenced I/O row is dense (router FIFOs) and keeps a little global-route
+# overflow (about 0.3% of the resources, none in the link channels): accept it,
+# the grid study measures link wires and timing after global routing.
+export GLOBAL_ROUTE_ARGS = -congestion_iterations 10 -allow_congestion -verbose
+# The repair after global routing peaks at 22 GB here (more than the machine
+# leaves): placement and CTS have repaired the design already, and the study
+# measures the global-route wires as they are.
+export SKIP_INCREMENTAL_REPAIR = 1

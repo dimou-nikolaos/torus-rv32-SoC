@@ -119,8 +119,16 @@ tools/dev.sh scripts/regress.py -k synth --synth --no-build
 
 # Place and route a compute tile in sky130hd (OpenROAD-flow-scripts, about an
 # hour): area, timing and power report in build/pnr/tile_<variant>_report.txt
-tools/dev.sh scripts/pnr.py tile --period 20
+tools/dev.sh scripts/pnr.py tile --period 20 --floorplan cross
 tools/dev.sh scripts/pnr.py tile --period 15 --variant p15 --to floorplan
+
+# The 4x4 grid with the tile as a hard macro, in logical or folded order (links
+# through the tiles' feedthroughs), to global routing: link lengths and timing
+# in build/pnr/grid_<order>_s0_report.txt, layout with links in the .png.
+# One grid run at a time: they need up to 22 GB.
+tools/dev.sh scripts/pnr.py tile --period 20 --variant ft --floorplan cross --to cts
+tools/dev.sh scripts/pnr.py tile --variant ft --floorplan cross --abstract --set ABSTRACT_SOURCE=4_1_cts
+tools/dev.sh scripts/pnr.py grid --order folded
 ```
 
 Waveforms are FST files; open them on the host with Surfer or GTKWave.

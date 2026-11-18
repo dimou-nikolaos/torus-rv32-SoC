@@ -13,6 +13,7 @@ Styles: tile (macros by bank, standard cells by unit), grid (one color per tile,
 I/O row and top-level cells apart).
 """
 import argparse
+import json
 import re
 import sys
 
@@ -106,9 +107,10 @@ def link_lines(def_text, comps, sizes, pins, macro):
         if pin not in LINK_PINS or inst not in where or where[inst][0] != macro:
             continue
         label, color = LINK_PINS[pin]
-        todo, seen = [(n, point(inst, pin))], set()
+        chain = f"{inst}/{pin}"
+        todo, seen = [(n, point(inst, pin), 0.0)], set()
         while todo:
-            n, p0 = todo.pop()
+            n, p0, acc = todo.pop()
             if n in seen:
                 continue
             seen.add(n)
@@ -116,17 +118,19 @@ def link_lines(def_text, comps, sizes, pins, macro):
                 if (i, pn) == (inst, pin) or i == "PIN" or i not in where or pn in ("X", "Y") and n == net_of.get((i, pn)):
                     continue
                 p1 = point(i, pn)
-                out.append((*p0, *p1, label, color))
+                a1 = acc + abs(p1[0] - p0[0]) + abs(p1[1] - p0[1])
+                out.append((*p0, *p1, label, color, chain, a1))
                 master = where[i][0]
                 if re.search(r"__(buf|clkbuf|dlygate|dlymetal)", master) and (i, "X") in net_of:
-                    todo.append((net_of[(i, "X")], p1))
+                    todo.append((net_of[(i, "X")], p1, a1))
                 ft = re.match(r"([xy]ft)_i(\[\d+\])$", pn)
                 if master == macro and ft and (i, f"{ft.group(1)}_o{ft.group(2)}") in net_of:
                     # through the tile's feedthrough: continue from the other edge
                     q = (i, f"{ft.group(1)}_o{ft.group(2)}")
                     p2 = point(*q)
-                    out.append((*p1, *p2, label, color))
-                    todo.append((net_of[q], p2))
+                    a2 = a1 + abs(p2[0] - p1[0]) + abs(p2[1] - p1[1])
+                    out.append((*p1, *p2, label, color, chain, a2))
+                    todo.append((net_of[q], p2, a2))
     return out
 
 
@@ -201,6 +205,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--no-labels", action="store_true", help="legend only, no labels on the layout")
     ap.add_argument("--links", action="store_true", help="grid: draw each tile output link (its valid bit)")
+    ap.add_argument("--links-json", help="with --links: write link lengths (Manhattan, pin to farthest sink through repeaters and feedthroughs)")
     args = ap.parse_args()
 
     sizes = lef_sizes(args.lef)
@@ -235,12 +240,26 @@ def main():
     if args.links:
         lines = link_lines(read_def.text, comps, sizes, lef_pins(args.lef, "tile_top"), "tile_top")
         seen = set()
-        for x0, y0, x1, y1, label, color in lines:
+        lengths = {}
+        for x0, y0, x1, y1, label, color, chain, acc in lines:
+            # a link's length: its longest path from the pin to a sink
+            lengths[(label, chain)] = max(lengths.get((label, chain), 0.0), acc)
             ax.plot([x0, x1], [y0, y1], color=color, lw=0.9, alpha=0.85)
             if label not in seen:
                 seen.add(label)
                 handles.append(matplotlib.lines.Line2D([], [], color=color, label=f"link {label}"))
         print(f"{len(lines)} link lines")
+        summary = {}
+        for (label, chain), length in lengths.items():
+            summary.setdefault(label, []).append((length, chain))
+        for lab in sorted(summary):
+            v = summary[lab]
+            args.note += (f"\nlink {lab:13s}longest {max(v)[0] / 1e3:.1f} mm, "
+                          f"mean {sum(l for l, _ in v) / len(v) / 1e3:.1f} mm")
+        if args.links_json:
+            json.dump({lab: {"links": len(v), "max_um": max(v)[0], "mean_um": sum(l for l, _ in v) / len(v),
+                             "longest": max(v)[1]} for lab, v in summary.items()},
+                      open(args.links_json, "w"), indent=1)
     # Labels on top: each group's name at the median of its instances (macros:
     # the middle of the group's bounding box), skipped for scattered leftovers.
     if not args.no_labels:

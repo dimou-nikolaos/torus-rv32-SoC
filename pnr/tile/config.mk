@@ -37,3 +37,8 @@ endif
 export PLACE_DENSITY    ?= 0.55
 export MACRO_ROWS_HALO_X ?= 20
 export MACRO_ROWS_HALO_Y ?= 20
+
+# Global routing does not clear its last overflow at the arm ends (832 pins on
+# adjacent tracks) within 30 iterations (4.5 hours): accept it and let detailed
+# routing, which works on real tracks, resolve it (its DRC count is reported).
+export GLOBAL_ROUTE_ARGS = -congestion_iterations 10 -allow_congestion -verbose

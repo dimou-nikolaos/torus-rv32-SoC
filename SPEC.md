@@ -441,6 +441,8 @@ Progress (2026-11-18): M3 done. Both planes run in the SoC with the plane fixed 
 
 Progress (2026-11-18): M4 done; buffer columns deferred (none for now, analysis in Open decisions). Performance model v1 simulates the network flit by flit and matches the RTL network cycle-exactly (every flit's send and ejection cycle, regression). Head-of-line blocking: B, C, deeper buffers, the critical bubble scheme and dateline VCs prototyped on 4x4 and 8x8; none wins across patterns (removing head-of-line blocking exposes bubble-rule injection starvation), so the router is unchanged. The SoC runs at 8x8 (multithreaded model, 4.7 kHz at 8 threads with idle cores); memcpy, Cannon, the new stencil and all-reduce kernels are bit-exact there, with exact per-link counts and the model within 1.5% for compute-bound kernels. Weak scaling 4x4 to 8x8: stencil 99.7%, Cannon 98.3%. Kernel load by a software tree: 1.6x to 2.5x faster at 8x8. Area: the tool image carries sky130 standard cells; a tile is 0.77 mm² of logic plus about 9 mm² of OpenRAM SRAM for its 64 KB.
 
+Progress (2026-11-19): M5 in progress. The tool image builds OpenROAD from source; the tile is placed in sky130 with its 64 KB as 32 OpenRAM macros (hand "cross" floorplan, 14.1 mm², meets 20 ns at CTS after two zero-cycle fixes to the core → scratchpad path). Hard tiles get feedthroughs, wired per placed order by soc_top FT_ORDER (verified transparent by the regression). Logical against folded order on 4x4: longest link 19.4 against 6.1 mm, worst link path 14.9 against 10.5 ns; no register slices needed at the tile's clock in either order. Next: the routed tile and the M7 baseline table.
+
 Keep every exit test in the regression once it passes, so later milestones cannot silently break earlier ones.
 
 ## M0 plan: environment and first tile
@@ -625,10 +627,22 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 ### M5: place and route
 
 - [x] OpenROAD and the sky130 PDK in the tool image → versions pinned, CI builds the image (2026-11-18: ORFS pinned to the commit of an official daily image, 26Q4-507-g2ba1223c8, and OpenROAD to the commit it pins; the 26Q4 tag no longer builds, a Bazel dependency's GitHub archive changed checksum. OpenROAD is a command-line build, about 50 minutes in its own image stage. The PDK adds the OpenRAM macros. Scratchpad banks for place and route (`spm_bank_sky130`, under `SPM_SKY130`): eight sky130_sram_2kbyte_1rw1r_32x512_8 per bank, four lanes wide and two deep, checked by `tb_spm_sky130` on OpenRAM's own model. The macro drives read data after the falling edge and does not hold it, so `spm_bank` now promises read data in the cycle after a read only, and simulation builds invert it in every other cycle; the whole regression passes with that)
-- [ ] OpenROAD flow for one tile (scratchpad banks as macros) → placed and routed, area and timing report stored
-- [ ] Achievable fabric clock and link slices needed → recorded per slice depth
-- [ ] Grid floorplan in logical order (4x4 plus the I/O row) → longest wire and timing recorded
-- [ ] Grid floorplan in folded order → comparison with logical order recorded
+- [ ] OpenROAD flow for one tile (scratchpad banks as macros) → placed and routed, area and timing report stored (2026-11-19: placed and clock-tree synthesized, detailed route running; `scripts/pnr.py tile --floorplan cross`, reports and layout images in build/pnr, images in docs/img/m5. The ORFS macro placer put the logic in one strip: 16.8 mm², −3.0 ns at 20 ns. The hand "cross" floorplan (`pnr/tile/cross.tcl`: a bank of eight macros per corner, mirrored so the pins face the channels, the logic in a cross of channels, X links entering the horizontal arm, Y links the vertical one) meets 20 ns: 13.45 mm², 14.1 mm² with the feedthrough pins (832 pins per arm end, horizontal arm 620 µm). Tile at CTS, 20 ns: 155k cells, 1.28 mm² of standard cells, 9.11 mm² of macros, worst slack +0.91 ns (19.1 ns), 166 mW estimated. Critical path: core → bank arbiter → grant → SRAM write data, after the two zero-cycle fixes (counter events registered, atomic adder off the grant path); the next lever is a skid buffer on the core's request, deferred)
+- [ ] Achievable fabric clock and link slices needed → recorded per slice depth (links: none needed at the tile's clock in either order; logical order needs a slice on its wraparounds below about 15 ns, folded order below about 10.5 ns, from the worst link paths below. The fabric clock is the tile's, final number with the routed tile)
+- [x] Grid floorplan in logical order (4x4 plus the I/O row) → longest wire and timing recorded (`scripts/pnr.py grid --order logical`: the tile's abstract as a hard macro, 400 µm channels, the I/O row fenced into its own 800 µm band, global routing; 308.6 mm². Longest link 19.4 mm (NoC1 north from row 0 to the I/O row through four tiles), worst link path 14.9 ns at 20 ns)
+- [x] Grid floorplan in folded order → comparison with logical order recorded (table below)
+
+  Hard tiles block every metal layer, so links that pass a tile need a way through it: channel-only routing has every skip-one link of a folded ring detour around the tile in between. Each tile therefore has feedthroughs, two lanes per dimension (wires), and `soc_top` FT_ORDER chains every link through the tiles it crosses for a placed order (1 logical, 2 folded); every tile carries exactly one link per lane in both orders (wraparounds through every tile in logical order, the skipped tile or the fold's U-turn in folded order). Only wiring changes: memcpy and Cannon on 4x4 give the same cycle counts and per-link counts with FT_ORDER 0, 1 and 2 (regression).
+
+  | 4x4 + I/O row, global-route parasitics, 20 ns | Logical | Folded |
+  | --- | --- | --- |
+  | Longest link wire (pin to farthest sink) | 19.4 mm | 6.1 mm |
+  | Mean link wire per class (east, south, west, north) | 4.1, 0.6, 4.0, 5.1 mm | 4.8, 5.7, 4.2, 4.1 mm |
+  | Worst X link path (slack) | 13.4 ns (+6.6) | 8.3 ns (+11.7) |
+  | Worst Y link path, incl. through feedthroughs (slack) | 14.9 ns (+5.1) | 10.5 ns (+9.5) |
+  | Register slices needed | none at 20 ns; below about 15 ns | none at 20 ns; below about 10.5 ns |
+
+  The fold shortens the longest wire 3.2x and the longest link path by 4.4 ns (about 0.3 ns per mm of repeated wire, including the tiles' clock-to-out and input logic). Images: `docs/img/m5/grid_logical_s0.png`, `grid_folded_s0.png` (tiles and the I/O row coloured and labelled, one flyline per link through repeaters and feedthroughs), `tile_ft.png`. Caveats: the dense I/O-row fence keeps 0.3% global-route overflow, and its routers' internal paths fail at 20 ns without the repair after global routing, which the study skips for memory (22 GB; a taller band would fix both); reset is not timed as a network (a real design synchronizes reset per tile); the tile abstract is from the CTS stage.
 - [ ] Baseline numbers (area, clock, energy estimate per flit and per MAC) → table recorded for M7
 
 ### M6: FPGA port
