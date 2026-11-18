@@ -614,7 +614,36 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 | Buffer columns | None, two columns half an X ring apart | Leaning: none; enable only if a workload's model shows it needs a shared working set | M4 |
 | Synthesis target | Generic Yosys cells, sky130 liberty | Leaning: generic for area trends, sky130 when timing matters | M4 |
 | Phase-2 engine | Zve32x, custom int8 matrix unit | Open: Zve32x for standard tooling, custom unit for performance per area | M5 |
+| Router head-of-line blocking | Deeper buffers; searchable shared input buffer; split X input (continue / leave) with per-queue credits; one queue per output on every input; software scheduling | Open: see Open issues. Prototype in performance model v1 first | M4 |
 
 - [x] Confirm CV32E40X builds in Verilator and Yosys with the chosen frontend (M0): yes, yosys-slang, no sv2v
 - [x] Fix flit width and coordinate width: 204-bit flit, 4-bit coordinates, router grid up to 16x16 including the I/O row and buffer columns
 - [x] Pick the first GEMM size and block size so it fits 60 KB per tile with double buffering: int32, N=64 on 4x4 (16x16 blocks, 5 KB per tile with A and B double-buffered) in the regression, N=128 (32x32 blocks, 20 KB) as the long run; blocks of up to 4 KB at 0x8000..0xCFFF
+
+## Open issues
+
+### Head-of-line blocking at the router turn (found in M2, measured in M3)
+
+Problem. Each router input has one FIFO. On the X input, flits that continue on X, flits that turn to Y and flits that eject share it. A turning flit at the head waits when the Y output is busy with a flow continuing on Y, or when the bubble rule wants two credits there; the flit behind it, bound for the idle X output, waits too. With single-flit packets and fixed routes this is the only coupling between flows that do not share an output.
+
+Cost measured on 4x4 (memcpy, 16 KB per tile, both planes):
+
+| Pattern | Busiest link | Bound (busiest link x 1024 flits) | Even split of shared links (model v0) | Measured |
+| --- | --- | --- | --- | --- |
+| shift (1,1), (−1,−1) | 1 flow | 1024 | 1094 | 1136–1143 (90% of bound; setup and latency) |
+| shift (2,2) | 2 flows | 2048 | 2120 | 3285 (62%) |
+| shift (1,−1) | 3 flows | 3072 | 3144 | 4174 (74%) |
+
+So up to 1.55x on contended patterns. Shift (1,−1) even ran 5% slower on two planes than on one.
+
+Options:
+
+| | Fix | Changes | Expected gain | Cost and risk |
+| --- | --- | --- | --- | --- |
+| A | Deeper input buffers | Depth only | Small: the head still blocks | Area |
+| B | Searchable shared buffer: each output takes the oldest flit bound for it, not only the head | Input buffer becomes an age-ordered compacting array; allocator searches it | Partial: the slower (turning) class fills the shared buffer and then starves the other through credits | Medium. Links, credits and the bubble rule unchanged; per-pair order is safe (flits to different outputs are different pairs); longer allocation path |
+| C | Two queues on each X input, continue on X and leave X (turn or eject), each with its own credits | Second FIFO per X input; two credit wires per X link; the upstream keeps a counter per queue (the lookahead port already names the queue) | Full decoupling of continuing and turning flows | Medium-high. Deadlock argument redone (bubble rule on the continue queues, which form the ring cycle), new no-bubble deadlock demonstrations and soaks. Estimate +15–20k transistors per router, +8–10% tile logic, to be measured |
+| D | One queue per output on every input | C on the Y and local inputs too | Little beyond C: ejection always drains | About twice C |
+| E | Software: phase transfers so links are not shared | Kernels and libraries | Pattern-specific | None in hardware |
+
+Plan: (1) performance model v1, flit-level router queues, validated against the current RTL (3285 and 4174 cycles above); it is also the M4 calibration model. (2) Prototype B and C in the model and measure memcpy and the M4 kernels. (3) Implement C in RTL, limited to the X input, if the gain justifies the area and the re-proof.
