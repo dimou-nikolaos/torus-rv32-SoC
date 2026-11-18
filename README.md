@@ -7,7 +7,7 @@ milestones and verification plan are in [SPEC.md](SPEC.md).
 Status: M3 done: both NoC planes (NoC0 east/south, NoC1 west/north) with an I/O row, every
 flit on the plane with fewer hops; programs are loaded and launched from C++ (libtorus) through
 the I/O tile's AXI port; memcpy and Cannon GEMM on 4x4 checked against the performance model.
-Next: M4 (scale to 8x8).
+Next: M4 (scale to 8x8), then place and route (M5), FPGA (M6), compute engine (M7).
 
 ## Topology
 

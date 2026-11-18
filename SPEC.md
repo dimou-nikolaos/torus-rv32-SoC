@@ -42,7 +42,7 @@ Tools come from OSS CAD Suite, pinned to one dated release, plus the few things 
 | Spike | Repo submodule, built by the project | Golden model per core | Linked as a library; scratchpad and MMIO sync through its memory callbacks (no patch needed so far), later custom instructions |
 | Python 3 + pytest | Image | Test driver and analysis | Regressions, plots, counter comparison |
 | CMake + Ninja | Image | Build | One target per testbench, one per kernel |
-| OpenROAD (M6) | Added later | Place-and-route experiment | Logical vs folded tile placement |
+| OpenROAD and sky130 PDK (M5) | Added to the image in M5 | Place and route | Tile and grid placement, logical against folded order |
 
 Setup:
 
@@ -99,7 +99,7 @@ The router grid is `GX` x `GY` with `GX = NX` (plus 2 with buffer columns) and `
 | --- | --- | --- |
 | Grid | 4x4 compute, target 8x8; router grid NX x (NY+1) | Uniform compute tiles, no DRAM tiles; the extra row is the I/O row |
 | I/O tile | One, at logical (0, NY) in the I/O row | AXI slave front-end, async FIFO, bridge to NIU; driven by a C++ AXI model in Verilator and by QDMA on FPGA (see I/O tile) |
-| Core | RV32IM, CV32E40X | Decided. RV32IM configuration (no A, C or B), RVFI for Spike lockstep, CV-X-IF reserved for M5 |
+| Core | RV32IM, CV32E40X | Decided. RV32IM configuration (no A, C or B), RVFI for Spike lockstep, CV-X-IF reserved for M7 |
 | Scratchpad | 64 KB, 4 banks x 128 bit | Single-cycle; banks interleaved on address bits `[5:4]`; seven-port arbiter per bank with a starvation bound (see Scratchpad bank arbiter) |
 | DMA | 2 channels per tile | Channel 0 for reads (READ\_REQ), channel 1 for writes, so double buffering works |
 | Router | One 3x3 router per plane, pipelined, dimension-ordered, single-flit packets | Ports: local, X ring, Y ring (see Router). Credit-based flow control, credits sized to the link round trip |
@@ -108,7 +108,7 @@ The router grid is `GX` x `GY` with `GX = NX` (plus 2 with buffer columns) and `
 | Optional: buffer columns | Two columns half an X ring apart: logical `x = NX/2` and `x = NX + 1`, so `GX = NX + 2` | NIU plus large SRAM, no core. Being half a ring apart, they fold onto the physical left and right edges. Compute columns become non-contiguous in router coordinates; the SDK hides this |
 | Optional: extra I/O tiles | Further positions in the I/O row | The I/O row folds onto a die edge, where pads are. A second row block half a Y ring away would fold onto the opposite edge |
 
-Compute tile (the engine and its links arrive in M5):
+Compute tile (the engine and its links arrive in M7):
 
 ```
                 NoC0 in (W, N)      NoC1 in (E, S)
@@ -123,7 +123,7 @@ Compute tile (the engine and its links arrive in M5):
              +---+---------+---------+---------+----+
                  | TX-DMA  | TX-rep  | RX0     | RX1
 +----------+  I  +-v---------v---------v---------v-+    +- - - - - - - -+
-| CV32E40X +---->+ bank arbiter x4 (7 ports)       +<---+ engine (M5)   |
+| CV32E40X +---->+ bank arbiter x4 (7 ports)       +<---+ engine (M7)   |
 | (RV32IM) +---->+ 4 banks x 128 bit, 64 KB        |    | CV-X-IF ctrl  |
 +----+-----+  D  +---------------------------------+    +- - - - - - - -+
      |
@@ -148,11 +148,11 @@ Together with local to local (the NIU loopback), that is 8 of the 9 crossbar pat
 
 ### Scratchpad bank arbiter
 
-Each of the 4 banks has its own arbiter with seven master ports, all present from M0 onward even while only the core is connected, so M1 and M5 add masters without changing the arbiter:
+Each of the 4 banks has its own arbiter with seven master ports, all present from M0 onward even while only the core is connected, so M1 and M7 add masters without changing the arbiter:
 
 | Port | Master | Width | Access |
 | --- | --- | --- | --- |
-| 0 | Engine (M5) | 128 bit | Read and write |
+| 0 | Engine (M7) | 128 bit | Read and write |
 | 1 | NIU RX0 (ejection, NoC0) | 128 bit | Write, read-modify-write for ATOMIC\_INC |
 | 2 | NIU RX1 (ejection, NoC1) | 128 bit | Write, read-modify-write for ATOMIC\_INC |
 | 3 | NIU TX-DMA (DMA WRITE source) | 128 bit | Read |
@@ -171,7 +171,7 @@ Arbitration is priority with a starvation bound:
 
 This bound is what makes NIU ejection always drain: writes and atomics wait only on the local bank arbiter, never on the network (see NIU structure).
 
-### Compute engine attachment (M5)
+### Compute engine attachment (M7)
 
 The engine connects to the core through CV-X-IF for control only, and to the scratchpad through its own wide port for data. CV-X-IF can route coprocessor loads and stores through the core's LSU, but that path is 32-bit and one access at a time, which would starve any engine worth adding. The spec allows bypassing it (Vicuna does), and this tile does.
 
@@ -417,7 +417,7 @@ Optional: SymbiYosys properties on the router (no flit created or lost, credit c
 
 ## Milestones
 
-Seven milestones, each ending in a runnable test rather than a feature list. The NoC is a torus from M1: with one-way planes a mesh cannot reach every destination (NoC0 alone cannot go west or north, and even both planes cannot reach north-east or south-west without the wraparound links). M1 builds the torus on NoC0, M3 adds NoC1. M6 is optional.
+Eight milestones, each ending in a runnable test rather than a feature list. The NoC is a torus from M1: with one-way planes a mesh cannot reach every destination (NoC0 alone cannot go west or north, and even both planes cannot reach north-east or south-west without the wraparound links). M1 builds the torus on NoC0, M3 adds NoC1. The order after M3 (decided 2026-11-18): first finish and measure the baseline at 8x8, place and route it and check the fold, port it to FPGA, and only then add the compute engine, measured against the placed baseline.
 
 | Milestone | Scope | Exit test |
 | --- | --- | --- |
@@ -425,9 +425,10 @@ Seven milestones, each ending in a runnable test rather than a feature list. The
 | M1 | 2x2 torus on NoC0: pipelined credit-based router, bubble rule, NIU | Ping-pong kernel on a 2x2 torus (backdoor load), router throughput suite green at slice depths 0 to 2, long random traffic without deadlock |
 | M2 | I/O row, I/O tile and launch | memcpy on a 4x4 torus (NoC0) loaded and launched from C++ through the I/O tile, bit-exact, performance model within tolerance |
 | M3 | Second plane | Cannon GEMM on a 4x4 torus with both planes, bit-exact, counters within 15% of the model |
-| M4 | Scale to 8x8 | Full kernel suite at 8x8, scaling efficiency and model error recorded |
-| M5 | Compute engine | GEMM on the engine bit-exact, speedup and perf/area against scalar recorded |
-| M6 (optional) | Place and route | Logical against folded floorplan comparison recorded |
+| M4 | Scale to 8x8 | Full kernel suite at 8x8, scaling efficiency and model error recorded, head-of-line blocking decided (and fixed if it pays) |
+| M5 | Place and route | Tile placed and routed in sky130 with timing; a grid in logical against folded order, longest wire and timing recorded |
+| M6 | FPGA port | memcpy and Cannon run on the board, launched from libtorus, bit-exact, cycle counts compared with simulation |
+| M7 | Compute engine | GEMM on the engine bit-exact, speedup and perf/area against scalar and against the placed baseline recorded |
 
 The exit tests summarize the microtasks below, which are the authoritative list.
 
@@ -461,7 +462,7 @@ Risks to check first:
 
 - CV32E40X SystemVerilog constructs through yosys-slang; fall back to sv2v for synthesis only if needed.
 - Aligning Spike and RVFI on traps and CSR side effects, so lockstep mismatches mean real bugs.
-- Scratchpad bank arbitration is almost trivial at M0 (core instruction and data only), so the arbiter and its model must already have all seven ports and the starvation bound to avoid rework in M1 and M5. Instruction fetch and data access colliding on one bank is the first real conflict case and is tested from M0.
+- Scratchpad bank arbitration is almost trivial at M0 (core instruction and data only), so the arbiter and its model must already have all seven ports and the starvation bound to avoid rework in M1 and M7. Instruction fetch and data access colliding on one bank is the first real conflict case and is tested from M0.
 
 M0 exit checklist:
 
@@ -572,6 +573,9 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 ### M4: scale to 8x8
 
 - [ ] 8x8 build with Verilator threads → simulation speed recorded
+- [ ] Performance model v1, flit-level router queues → matches the RTL on the contended memcpy patterns (3285 and 4174 cycles on 4x4)
+- [ ] Head-of-line blocking options B and C in model v1 → gain per pattern and kernel recorded, decision in open decisions (see Open issues)
+- [ ] Head-of-line fix in RTL if it pays (option C on the X input) → router, link and deadlock tests green, contended patterns at the model's prediction, area recorded
 - [ ] Rectangle multicast op → kernel load time reduced, test passes
 - [ ] 2D stencil kernel → bit-exact
 - [ ] Reduction kernel → bit-exact
@@ -581,29 +585,41 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 - [ ] Model calibration → error table per kernel
 - [ ] Buffer columns decision → recorded in open decisions
 
-### M5: compute engine
+### M5: place and route
 
-- [ ] Engine choice made with the model → decision recorded
+- [ ] OpenROAD and the sky130 PDK in the tool image → versions pinned, CI builds the image
+- [ ] OpenROAD flow for one tile (scratchpad banks as macros) → placed and routed, area and timing report stored
+- [ ] Achievable fabric clock and link slices needed → recorded per slice depth
+- [ ] Grid floorplan in logical order (4x4 plus the I/O row) → longest wire and timing recorded
+- [ ] Grid floorplan in folded order → comparison with logical order recorded
+- [ ] Baseline numbers (area, clock, energy estimate per flit and per MAC) → table recorded for M7
+
+### M6: FPGA port
+
+- [ ] Board and toolchain decision → recorded in open decisions
+- [ ] FPGA top: clocks, resets, scratchpad banks on block RAM, largest grid that fits → synthesizes, utilization and timing recorded
+- [ ] JTAG debug module SBA front-end for the I/O tile → hello-world loads and runs in simulation (regression test) and on the board
+- [ ] QDMA transport for libtorus (AXI memory-mapped through PCIe) → Device finds the I/O tile, remote read and write test passes on the board
+- [ ] memcpy and Cannon on the board → bit-exact, cycle counts against simulation recorded
+- [ ] Pblocks in folded order, if timing needs them → timing comparison recorded
+
+### M7: compute engine
+
+- [ ] Engine choice made with the model and the M5 baseline → decision recorded
 - [ ] Engine golden model in C++ → test vectors generated
 - [ ] Engine RTL standalone with its scratchpad port → matches the golden model
 - [ ] CV-X-IF control path and custom instructions → issue and result test passes
 - [ ] Spike model of the custom instructions → lockstep passes
 - [ ] Engine arbiter port live → bank-conflict and starvation-promotion counters recorded
 - [ ] GEMM kernel on the engine → bit-exact, speedup measured
+- [ ] Tile with the engine placed and routed again → area and timing against the M5 baseline
 - [ ] Perf/area vs scalar → table recorded
-
-### M6: place and route (optional)
-
-- [ ] OpenROAD flow for one tile → placed and routed, timing report
-- [ ] Grid floorplan in logical order → longest wire and timing recorded
-- [ ] Grid floorplan in folded order → comparison recorded
-- [ ] FPGA pblocks in folded order → timing comparison recorded
 
 ## Open decisions
 
 | Decision | Options | Status | Decide by |
 | --- | --- | --- | --- |
-| Core | CV32E40X, Ibex, own in-order core | Decided: CV32E40X (RV32IM, RVFI, CV-X-IF for M5) | Done |
+| Core | CV32E40X, Ibex, own in-order core | Decided: CV32E40X (RV32IM, RVFI, CV-X-IF for M7) | Done |
 | Scratchpad organization | 4 banks x 128-bit, 2 banks dual-port | Decided: 4 banks x 128-bit, seven-port arbiter (engine, NIU RX0, RX1, TX-DMA, TX-reply, core data, core instruction) with a starvation bound | Done |
 | I/O tile placement | In the compute grid, extra row, extra column | Decided: extra I/O row at logical `y = NY`, part of the Y rings; further row blocks later | Done |
 | Request/reply deadlock | Separate message classes, NIU always sinks requests | Decided: READ\_REQ queue sized for the worst case, ejection never waits on injection | Done |
@@ -613,7 +629,8 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 | Multicast encoding | Rectangle in the header, separate multicast flit | Open: decide with the M4 kernel-load measurements | M4 |
 | Buffer columns | None, two columns half an X ring apart | Leaning: none; enable only if a workload's model shows it needs a shared working set | M4 |
 | Synthesis target | Generic Yosys cells, sky130 liberty | Leaning: generic for area trends, sky130 when timing matters | M4 |
-| Phase-2 engine | Zve32x, custom int8 matrix unit | Open: Zve32x for standard tooling, custom unit for performance per area | M5 |
+| Phase-2 engine | Zve32x, custom int8 matrix unit | Open: Zve32x for standard tooling, custom unit for performance per area; decided with the placed baseline of M5 | M7 |
+| FPGA board and toolchain | Board with PCIe and QDMA (Alveo or a Kintex/Virtex UltraScale+ dev board) and Vivado; smaller boards with JTAG only | Open: depends on the grid size that fits and what hardware is available | M6 |
 | Router head-of-line blocking | Deeper buffers; searchable shared input buffer; split X input (continue / leave) with per-queue credits; one queue per output on every input; software scheduling | Open: see Open issues. Prototype in performance model v1 first | M4 |
 
 - [x] Confirm CV32E40X builds in Verilator and Yosys with the chosen frontend (M0): yes, yosys-slang, no sv2v
