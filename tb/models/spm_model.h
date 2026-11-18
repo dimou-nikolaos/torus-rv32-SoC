@@ -11,7 +11,9 @@ namespace torus {
 constexpr int kSpmPorts = 7;
 constexpr int kSpmBanks = 4;
 constexpr int kSpmBytes = 64 * 1024;
-constexpr int kNiuLo = 1, kNiuHi = 4;  // round-robin group (RX0, RX1, TX-DMA, TX-reply)
+// Ports: engine, RX0, RX1, TX-DMA, TX-reply, core data, core instruction.
+// Default order: engine, TX (round-robin), RX (round-robin), core data, core instruction.
+constexpr int kRx0 = 1, kRx1 = 2, kTxDma = 3, kTxRep = 4;
 
 inline int spm_bank_of(uint32_t addr) { return (addr >> 4) & 3; }
 
@@ -26,7 +28,8 @@ class ArbiterModel {
     lock_ = false;
     lock_port_ = 0;
     rr_prom_ = kSpmPorts - 1;
-    rr_grp_ = kNiuHi;
+    rr_tx_ = kTxRep;
+    rr_rx_ = kRx1;
   }
 
   // Worst-case wait (denied cycles) the RTL asserts against.
@@ -46,8 +49,10 @@ class ArbiterModel {
       gnt = rr_pick(prom, 0, kSpmPorts - 1, rr_prom_);
     } else if (req & 1) {
       gnt = 1;  // engine
-    } else if (req & group_mask()) {
-      gnt = rr_pick(req & group_mask(), kNiuLo, kNiuHi, rr_grp_);
+    } else if (req & kTxMask) {
+      gnt = rr_pick(req & kTxMask, kTxDma, kTxRep, rr_tx_);
+    } else if (req & kRxMask) {
+      gnt = rr_pick(req & kRxMask, kRx0, kRx1, rr_rx_);
     } else if (req >> 5 & 1) {
       gnt = 1u << 5;  // core data
     } else if (req >> 6 & 1) {
@@ -61,7 +66,8 @@ class ArbiterModel {
     lock_ = new_lock;
     lock_port_ = g;
     if (use_prom && gnt) rr_prom_ = g;
-    if (!use_prom && !lock_path && (gnt & group_mask())) rr_grp_ = g;
+    if (!use_prom && !lock_path && (gnt & kTxMask)) rr_tx_ = g;
+    if (!use_prom && !lock_path && (gnt & kRxMask)) rr_rx_ = g;
     for (int i = 0; i < kSpmPorts; i++) {
       if ((req >> i & 1) && !(gnt >> i & 1)) {
         if (age_[i] != limit_) age_[i]++;
@@ -73,7 +79,8 @@ class ArbiterModel {
   }
 
  private:
-  static uint32_t group_mask() { return ((1u << (kNiuHi + 1)) - 1) & ~((1u << kNiuLo) - 1); }
+  static constexpr uint32_t kTxMask = 1u << kTxDma | 1u << kTxRep;
+  static constexpr uint32_t kRxMask = 1u << kRx0 | 1u << kRx1;
 
   static uint32_t rr_pick(uint32_t cand, int lo, int hi, int last) {
     int n = hi - lo + 1;
@@ -88,7 +95,7 @@ class ArbiterModel {
   std::array<int, kSpmPorts> age_{};
   bool lock_ = false;
   int lock_port_ = 0;
-  int rr_prom_ = 0, rr_grp_ = 0;
+  int rr_prom_ = 0, rr_tx_ = 0, rr_rx_ = 0;
 };
 
 // Byte-addressed scratchpad contents.

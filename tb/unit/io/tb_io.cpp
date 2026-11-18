@@ -3,12 +3,13 @@
 // asynchronous clock ratio (--ratio=0..5, else chosen by the seed).
 //
 // The host side is the AXI bus functional model, with random gaps and B/R
-// backpressure. The NoC side models the rest of the grid: every injected flit
-// is checked (source, lookahead port, READ_REQ fields) and applied to a memory
-// per tile; READ_REQs are answered with READ_RSP flits after a random delay,
-// in order per tile but interleaved across tiles; injection credits come back
-// late at random; tiles send ATOMIC_INC and WRITE flits to the I/O register
-// block, plus flits the I/O tile must drop.
+// backpressure. The NoC side models the rest of the grid on both planes: every
+// injected flit is checked (source, lookahead port, the plane select_plane()
+// gives, READ_REQ fields) and applied to a memory per tile; READ_REQs are
+// answered with READ_RSP flits after a random delay, in order per tile but
+// interleaved across tiles, each tile on its plane towards the I/O tile;
+// injection credits come back late at random; tiles send ATOMIC_INC and WRITE
+// flits to the I/O register block, plus flits the I/O tile must drop.
 //
 // The host keeps a shadow of everything it wrote. A read may not overlap a
 // write still in flight (and the other way round); every read must then
@@ -30,6 +31,7 @@
 #include "Vtb_io_top.h"
 #include "axi_bfm.h"
 #include "noc_flit.h"
+#include "noc_tlm.h"
 #include "router_model.h"
 #include "tb_args.h"
 
@@ -73,6 +75,28 @@ struct Range {
 };
 bool overlap(const Range& a, const Range& b) { return a.lo < b.hi && b.lo < a.hi; }
 
+int plane(int sx, int sy, int dx, int dy) { return select_plane(kGX, kGY, sx, sy, dx, dy); }
+
+template <typename W>
+void put_flit(W& vec, int p, const Flit& f) {
+  uint32_t w[Flit::kWords];
+  f.pack(w);
+  for (int b = 0; b < Flit::kBits; b++) {
+    int bit = p * Flit::kBits + b;
+    if (w[b / 32] >> (b % 32) & 1) vec[bit / 32] |= 1u << (bit % 32);
+    else vec[bit / 32] &= ~(1u << (bit % 32));
+  }
+}
+template <typename W>
+Flit get_flit(const W& vec, int p) {
+  uint32_t w[Flit::kWords] = {};
+  for (int b = 0; b < Flit::kBits; b++) {
+    int bit = p * Flit::kBits + b;
+    if (vec[bit / 32] >> (bit % 32) & 1) w[b / 32] |= 1u << (b % 32);
+  }
+  return Flit::unpack(w);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -108,9 +132,10 @@ int main(int argc, char** argv) {
     bool last;                   // the request's last reply
   };
   std::deque<Reply> replies[kGX * kGY];
-  std::deque<int> inj_credit_delay;
-  std::deque<Flit> tile_traffic;  // to the I/O tile, besides replies
-  int ej_credits = kDepth;
+  std::deque<int> inj_credit_delay[2];
+  std::deque<Flit> tile_traffic[2];  // to the I/O tile, besides replies, per plane
+  int ej_credits[2] = {kDepth, kDepth};
+  uint64_t ej_flits[2] = {0, 0}, inj_per_plane[2] = {0, 0};
   int rd_in_flight = 0, max_rd_in_flight = 0;
   int reply_lat = 10;
   int credit_jitter = 6;
@@ -122,33 +147,23 @@ int main(int argc, char** argv) {
   int traffic_pct = 0;           // no tile traffic until reset is over
 
   auto net_drive = [&]() {
-    bool cr = false;
-    if (!inj_credit_delay.empty() && inj_credit_delay.front() <= 0) {
-      cr = true;
-      inj_credit_delay.pop_front();
-    }
-    dut->inj_credit_i = cr;
+    dut->inj_credit_i = 0;
     dut->ej_valid_i = 0;
-    if (ej_credits <= 0) return;
-    // A reply whose tile is ready, else tile traffic
-    int start = (int)(rng() % (kGX * kGY));
-    for (int i = 0; i < kGX * kGY; i++) {
-      auto& q = replies[(start + i) % (kGX * kGY)];
-      if (!q.empty() && q.front().ready <= fcycles) {
-        Flit f = q.front().f;
-        if (q.front().last) rd_in_flight--;   // the slot frees later still: an upper bound
-        q.pop_front();
-        uint32_t w[Flit::kWords];
-        f.pack(w);
-        for (int k = 0; k < Flit::kWords; k++) dut->ej_flit_i[k] = w[k];
-        dut->ej_valid_i = 1;
-        ej_credits--;
-        n_rsp++;
-        n_rx_all++;
-        return;
+    for (int p = 0; p < 2; p++) {
+      auto& cd = inj_credit_delay[p];
+      if (!cd.empty() && cd.front() <= 0) {
+        dut->inj_credit_i |= (uint8_t)(1u << p);
+        cd.pop_front();
       }
     }
-    if (tile_traffic.empty() && (int)(rng() % 100) < traffic_pct) {
+    auto send = [&](int p, const Flit& f) {
+      put_flit(dut->ej_flit_i, p, f);
+      dut->ej_valid_i |= (uint8_t)(1u << p);
+      ej_credits[p]--;
+      ej_flits[p]++;
+      n_rx_all++;
+    };
+    if (tile_traffic[0].empty() && tile_traffic[1].empty() && (int)(rng() % 100) < traffic_pct) {
       Flit f;
       f.src_x = (uint8_t)(rng() % kGX);
       f.src_y = (uint8_t)(rng() % (kGY - 1));
@@ -178,30 +193,38 @@ int main(int argc, char** argv) {
         }
         n_bad++;
       }
-      tile_traffic.push_back(f);
+      tile_traffic[plane(f.src_x, f.src_y, kIoX, kIoY)].push_back(f);
     }
-    if (!tile_traffic.empty()) {
-      Flit f = tile_traffic.front();
-      tile_traffic.pop_front();
-      uint32_t w[Flit::kWords];
-      f.pack(w);
-      for (int k = 0; k < Flit::kWords; k++) dut->ej_flit_i[k] = w[k];
-      dut->ej_valid_i = 1;
-      ej_credits--;
-      n_rx_all++;
+    for (int p = 0; p < 2; p++) {
+      if (ej_credits[p] <= 0) continue;
+      // A reply whose tile is ready (and answers on this plane), else tile traffic
+      int start = (int)(rng() % (kGX * kGY));
+      bool sent = false;
+      for (int i = 0; i < kGX * kGY && !sent; i++) {
+        int n = (start + i) % (kGX * kGY);
+        auto& q = replies[n];
+        if (q.empty() || q.front().ready > fcycles || plane(n % kGX, n / kGX, kIoX, kIoY) != p) continue;
+        if (q.front().last) rd_in_flight--;   // the slot frees later still: an upper bound
+        send(p, q.front().f);
+        q.pop_front();
+        n_rsp++;
+        sent = true;
+      }
+      if (!sent && !tile_traffic[p].empty()) {
+        send(p, tile_traffic[p].front());
+        tile_traffic[p].pop_front();
+      }
     }
   };
 
-  auto net_sample = [&]() -> int {
-    if (dut->ej_credit_o) ej_credits++;
-    if (!dut->inj_valid_o) return 0;
-    uint32_t w[Flit::kWords];
-    for (int k = 0; k < Flit::kWords; k++) w[k] = dut->inj_flit_o[k];
-    Flit f = Flit::unpack(w);
+  // A flit the I/O tile injected on plane p
+  auto inject = [&](int p, const Flit& f, int la) -> int {
     inj_flits++;
+    inj_per_plane[p]++;
     TB_CHECK(f.src_x == kIoX && f.src_y == kIoY, "flit from (%u,%u)", f.src_x, f.src_y);
     TB_CHECK(f.dst_x < kGX && f.dst_y < kGY - 1, "flit to (%u,%u)", f.dst_x, f.dst_y);
-    TB_CHECK(dut->inj_la_o == (int)route(kIoX, kIoY, f.dst_x, f.dst_y), "lookahead port %d", dut->inj_la_o);
+    TB_CHECK(la == (int)route(kIoX, kIoY, f.dst_x, f.dst_y), "lookahead port %d", la);
+    TB_CHECK(p == plane(kIoX, kIoY, f.dst_x, f.dst_y), "flit to (%u,%u) on plane %d", f.dst_x, f.dst_y, p);
     bool reg = f.addr >= 0x10000000u;
     TB_CHECK(reg ? ((f.addr >> 12) == 0x10001 || (f.addr >> 12) == 0x10002) : f.addr < 0x10000,
              "flit to local address %08x", f.addr);
@@ -241,7 +264,16 @@ int main(int argc, char** argv) {
       TB_CHECK(false, "unexpected op %u", (unsigned)f.op);
     }
     int d = slow_credits ? 1 + (int)(rng() % (credit_jitter + 1)) : 1;
-    inj_credit_delay.push_back(d);
+    inj_credit_delay[p].push_back(d);
+    return 0;
+  };
+
+  auto net_sample = [&]() -> int {
+    for (int p = 0; p < 2; p++)
+      if (dut->ej_credit_o >> p & 1) ej_credits[p]++;
+    for (int p = 0; p < 2; p++)
+      if (dut->inj_valid_o >> p & 1)
+        if (inject(p, get_flit(dut->inj_flit_o, p), (dut->inj_la_o >> (2 * p)) & 3)) return 1;
     return 0;
   };
 
@@ -270,7 +302,8 @@ int main(int argc, char** argv) {
       fnext += (uint64_t)fh;
       if (frise) {
         fcycles++;
-        for (auto& d : inj_credit_delay) d--;
+        for (auto& cd : inj_credit_delay)
+          for (auto& d : cd) d--;
       }
     }
     eval();
@@ -536,9 +569,11 @@ int main(int argc, char** argv) {
   }
   if (tfp) tfp->close();
   dut->final();
-  printf("tb_io: PASS %llu operations, %llu flits (%llu writes, %llu READ_REQs, %llu replies), %llu tile flits "
-         "(%llu atomics, %llu dropped), %llu fabric cycles\n",
-         (unsigned long long)n_ops, (unsigned long long)inj_flits, (unsigned long long)n_writes,
+  TB_CHECK(inj_per_plane[0] && inj_per_plane[1] && ej_flits[0] && ej_flits[1], "a plane carried no traffic");
+  printf("tb_io: PASS %llu operations, %llu flits (NoC0 %llu, NoC1 %llu; %llu writes, %llu READ_REQs, %llu replies), "
+         "%llu tile flits (%llu atomics, %llu dropped), %llu fabric cycles\n",
+         (unsigned long long)n_ops, (unsigned long long)inj_flits, (unsigned long long)inj_per_plane[0],
+         (unsigned long long)inj_per_plane[1], (unsigned long long)n_writes,
          (unsigned long long)n_readreq, (unsigned long long)n_rsp, (unsigned long long)(n_atomic + n_bad),
          (unsigned long long)n_atomic, (unsigned long long)n_bad, (unsigned long long)fcycles);
   return 0;

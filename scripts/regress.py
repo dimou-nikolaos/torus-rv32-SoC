@@ -93,10 +93,12 @@ def discover(args):
     # M2 exit test: memcpy launched from C++ through the I/O tile, checked
     # bit-exact and against the performance model (exact per-link flit counts,
     # copy time within tolerance)
-    for grid, shift in (("2x2", "1,1"), ("4x4", "1,1"), ("4x4", "2,2")):
-        tests.append(Test(f"soc{grid}.memcpy_s{shift.replace(',', '')}", [
+    # M3: (-1,-1) runs on NoC1 only, (1,-1) on both planes (by row)
+    for grid, shift in (("2x2", "1,1"), ("4x4", "1,1"), ("4x4", "2,2"), ("4x4", "-1,-1"), ("4x4", "1,-1")):
+        tag = shift.replace(",", "_").replace("-", "m")
+        tests.append(Test(f"soc{grid}.memcpy_s{tag}", [
             sys.executable, "model/perf_model.py", "run-memcpy", "--host", str(BUILD / f"tb/soc/host_memcpy_{grid}"),
-            "--elf", str(BUILD / "sw/memcpy.elf"), "--shift", shift], timeout=1200))
+            "--elf", str(BUILD / "sw/memcpy.elf"), f"--shift={shift}"], timeout=1200))
     for elf in sorted((BUILD / "sw/isa").glob("*.elf")):
         tests.append(Test(f"isa.{elf.stem}", [tb, str(elf)]))
     if args.synth:

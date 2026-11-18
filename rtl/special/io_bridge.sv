@@ -15,13 +15,18 @@
 // Writes and reads leave in arrival order, so a read after a write to the
 // same tile sees it (path ordering).
 //
-// The network interface is injection-only from the bridge; ejection always
-// drains at once: READ_RSP into its slot, WRITE and ATOMIC_INC into the
-// register block, anything else dropped and counted.
+// The network interface sits on both planes. Each flit goes on the plane
+// select_plane() gives the I/O tile and its destination, so everything to one
+// tile takes one path. Ejection drains both planes, one flit per cycle,
+// round-robin when both have one: READ_RSP into its slot, WRITE and ATOMIC_INC
+// into the register block, anything else dropped and counted. A plane's head
+// waits at most one cycle for the other, never for injection.
 module io_bridge
   import noc_pkg::*;
   import io_pkg::*;
 #(
+  parameter int unsigned GX    = 2,
+  parameter int unsigned GY    = 3,
   parameter int unsigned DEPTH = 5,
   parameter int unsigned OUT   = 8
 ) (
@@ -37,11 +42,11 @@ module io_bridge
   output logic         rsp_push_o,
   output io_rsp_t      rsp_o,
   input  logic         rsp_full_i,
-  // NoC local port
-  output link_t        inj_o,
-  input  logic         inj_credit_i,
-  input  link_t        ej_i,
-  output logic         ej_credit_o,
+  // NoC local ports, per plane (0: NoC0, 1: NoC1)
+  output link_t        inj_o        [2],
+  input  logic         inj_credit_i [2],
+  input  link_t        ej_i         [2],
+  output logic         ej_credit_o  [2],
   // Register block
   output logic         host_we_o,
   output logic [11:0]  host_addr_o,
@@ -89,22 +94,31 @@ module io_bridge
   /* verilator lint_on UNUSEDSIGNAL */
 
   // ------------------------------------------------------------- injection
-  logic [CW-1:0] inj_credits;
+  // The head's plane; one flit per cycle on it when it has a credit
+  logic          h_plane;
   logic          inj_send;
+  logic          can_send [2];
   flit_t         inj_flit;
-  link_t         inj_q;
-  credit_counter #(.DEPTH(DEPTH)) u_cc (
-    .clk_i, .rst_ni, .send_i(inj_send), .credit_i(inj_credit_i), .credits_o(inj_credits)
-  );
-  always_ff @(posedge clk_i or negedge rst_ni)
-    if (!rst_ni) inj_q.valid <= 1'b0;
-    else         inj_q.valid <= inj_send;
-  always_ff @(posedge clk_i)
-    if (inj_send) begin
-      inj_q.flit    <= inj_flit;
-      inj_q.la_port <= route(x_i, y_i, inj_flit.dst_x, inj_flit.dst_y);
-    end
-  assign inj_o = inj_q;
+  assign h_plane = select_plane(x_i, y_i, h_x, h_y, GX, GY);
+  for (genvar p = 0; p < 2; p++) begin : g_inj
+    logic [CW-1:0] credits;
+    logic          send;
+    link_t         q;
+    assign send        = inj_send && h_plane == 1'(p);
+    assign can_send[p] = credits != '0;
+    credit_counter #(.DEPTH(DEPTH)) u_cc (
+      .clk_i, .rst_ni, .send_i(send), .credit_i(inj_credit_i[p]), .credits_o(credits)
+    );
+    always_ff @(posedge clk_i or negedge rst_ni)
+      if (!rst_ni) q.valid <= 1'b0;
+      else         q.valid <= send;
+    always_ff @(posedge clk_i)
+      if (send) begin
+        q.flit    <= inj_flit;
+        q.la_port <= route(x_i, y_i, inj_flit.dst_x, inj_flit.dst_y);
+      end
+    assign inj_o[p] = q;
+  end
 
   // ------------------------------------------------------------ reorder slots
   typedef enum logic [1:0] { SLOT_REMOTE, SLOT_LOCAL, SLOT_ERR } slot_kind_e;
@@ -134,7 +148,7 @@ module io_bridge
 
   logic slot_free, can_inj;
   assign slot_free = int'(used_q) < int'(OUT);
-  assign can_inj   = inj_credits != '0;
+  assign can_inj   = can_send[h_plane];
 
   logic wr_head, rd_head, wr_local, wr_send, rd_issue, rd_send, drain_free;
   assign wr_head  = !req_empty_i && !h.rd;
@@ -200,22 +214,38 @@ module io_bridge
   assign rsp_push_o = d_push;
 
   // ------------------------------------------------------------------- RX
+  // One ejection buffer per plane; the drain takes one head per cycle
   typedef struct packed { flit_t flit; } ej_t;
-  ej_t  rx_head;
-  logic rx_empty, rx_pop, ej_credit_q;
-  logic [$clog2(DEPTH):0] rx_count;
-  noc_fifo #(.DEPTH(DEPTH), .T(ej_t)) u_ej (
-    .clk_i, .rst_ni, .push_i(ej_i.valid), .data_i('{flit: ej_i.flit}), .pop_i(rx_pop),
-    .empty_o(rx_empty), .head_o(rx_head), .count_o(rx_count)
-  );
-  assign rx_pop = !rx_empty;   // ejection never waits
+  ej_t  rx_head [2];
+  logic rx_empty [2], rx_pop [2];
+  logic rx_sel, rx_rr_q, rx_any;
+  for (genvar p = 0; p < 2; p++) begin : g_ej
+    logic ej_credit_q;
+    logic [$clog2(DEPTH):0] count;
+    noc_fifo #(.DEPTH(DEPTH), .T(ej_t)) u_ej (
+      .clk_i, .rst_ni, .push_i(ej_i[p].valid), .data_i('{flit: ej_i[p].flit}), .pop_i(rx_pop[p]),
+      .empty_o(rx_empty[p]), .head_o(rx_head[p]), .count_o(count)
+    );
+    always_ff @(posedge clk_i or negedge rst_ni)
+      if (!rst_ni) ej_credit_q <= 1'b0;
+      else         ej_credit_q <= rx_pop[p];
+    assign ej_credit_o[p] = ej_credit_q;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic unused_ej;
+    assign unused_ej = ^{count, ej_i[p].la_port};
+    /* verilator lint_on UNUSEDSIGNAL */
+  end
+  // NoC1 when only it has a flit, or both have and NoC0 went last
+  assign rx_sel    = !rx_empty[1] && (rx_empty[0] || rx_rr_q);
+  assign rx_any    = !rx_empty[0] || !rx_empty[1];
+  assign rx_pop[0] = rx_any && !rx_sel;   // ejection never waits
+  assign rx_pop[1] = rx_any && rx_sel;
   always_ff @(posedge clk_i or negedge rst_ni)
-    if (!rst_ni) ej_credit_q <= 1'b0;
-    else         ej_credit_q <= rx_pop;
-  assign ej_credit_o = ej_credit_q;
+    if (!rst_ni)     rx_rr_q <= 1'b0;
+    else if (rx_any) rx_rr_q <= !rx_sel;
 
   flit_t rf;
-  assign rf = rx_head.flit;
+  assign rf = rx_head[rx_sel].flit;
   logic [SW-1:0] rf_slot;
   logic [1:0]    rf_beat;
   logic          rf_page, rsp_ok;
@@ -234,9 +264,9 @@ module io_bridge
   endfunction
 
   logic rx_rsp, rx_wr, rx_atom;
-  assign rx_rsp  = rx_pop && rf.op == OP_READ_RSP && rsp_ok;
-  assign rx_wr   = rx_pop && rf.op == OP_WRITE && rf_page;
-  assign rx_atom = rx_pop && rf.op == OP_ATOMIC_INC && rf_page && rf.addr[1:0] == '0;
+  assign rx_rsp  = rx_any && rf.op == OP_READ_RSP && rsp_ok;
+  assign rx_wr   = rx_any && rf.op == OP_WRITE && rf_page;
+  assign rx_atom = rx_any && rf.op == OP_ATOMIC_INC && rf_page && rf.addr[1:0] == '0;
 
   assign rx_we_o       = rx_wr;
   assign rx_addr_o     = rf.addr[11:0];
@@ -246,8 +276,8 @@ module io_bridge
   assign rx_inc_addr_o = rf.addr[11:0];
   assign rx_inc_val_o  = rf.data[31:0];
   assign ev_rsp_flit_o = rx_rsp;
-  assign ev_rx_err_o   = rx_pop && !rx_rsp && !rx_wr && !rx_atom;
-  assign ev_rx_flit_o  = rx_pop;
+  assign ev_rx_err_o   = rx_any && !rx_rsp && !rx_wr && !rx_atom;
+  assign ev_rx_flit_o  = rx_any;
 
   // ------------------------------------------------------------------ state
   always_ff @(posedge clk_i or negedge rst_ni)
@@ -284,7 +314,7 @@ module io_bridge
 `ifndef SYNTHESIS
   always_ff @(posedge clk_i or negedge rst_ni)
     if (rst_ni) begin
-      assert (!(rx_pop && rf.op == OP_READ_RSP && !rsp_ok))
+      assert (!(rx_any && rf.op == OP_READ_RSP && !rsp_ok))
         else $error("io_bridge: READ_RSP to %08x tag %02x matches no waiting slot", rf.addr, rf.tag);
       assert (!(rd_issue && rx_rsp && rf_slot == alloc_q)) else $error("io_bridge: reply to a slot being allocated");
     end
@@ -292,7 +322,7 @@ module io_bridge
 
   /* verilator lint_off UNUSEDSIGNAL */
   logic unused;
-  assign unused = ^{rx_count, ej_i.la_port, rf.vc, rf.dst_x, rf.dst_y, rf.src_x, rf.src_y, chunk_addr[31:12],
+  assign unused = ^{rf.vc, rf.dst_x, rf.dst_y, rf.src_x, rf.src_y, chunk_addr[31:12],
                     h.addr[19:16], h.addr[23:21], rf.data[127:32]};
   /* verilator lint_on UNUSEDSIGNAL */
 endmodule

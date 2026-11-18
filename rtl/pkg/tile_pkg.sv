@@ -41,7 +41,8 @@ package tile_pkg;
   localparam int unsigned SPM_BANK_LSB   = $clog2(SPM_WORD_BYTES);      // 4
   localparam int unsigned SPM_ROW_LSB    = SPM_BANK_LSB + $clog2(SPM_BANKS);  // 6
 
-  // Bank-arbiter master ports, in default priority order (see SPEC.md)
+  // Bank-arbiter master ports (SPEC.md). Default priority: engine, TX-DMA and
+  // TX-reply (round-robin), RX0 and RX1 (round-robin), core data, core instruction.
   localparam int unsigned SPM_PORTS   = 7;
   localparam int unsigned PORT_ENGINE = 0;
   localparam int unsigned PORT_RX0    = 1;
@@ -50,8 +51,6 @@ package tile_pkg;
   localparam int unsigned PORT_TXREP  = 4;
   localparam int unsigned PORT_CORE_D = 5;
   localparam int unsigned PORT_CORE_I = 6;
-  localparam int unsigned NIU_PORT_LO = PORT_RX0;
-  localparam int unsigned NIU_PORT_HI = PORT_TXREP;
 
   // Scratchpad master port. OBI-like: a request is held until granted; read
   // data returns exactly one cycle after the grant. `lock` on a granted request
@@ -100,21 +99,27 @@ package tile_pkg;
     EV_DATA_STALL  = 3,   // WB stalled on a data access
     EV_DENIED_0    = 4,   // 4..10: arbiter denials per port
     EV_PROMOTED_0  = 4 + SPM_PORTS,  // 11..17: grants through promotion per port
-    EV_NIU_TX      = 4 + 2 * SPM_PORTS,      // 18: flits injected by the NIU
-    EV_NIU_RX      = 5 + 2 * SPM_PORTS,      // 19: flits retired by the NIU
-    EV_NIU_ERR     = 6 + 2 * SPM_PORTS,      // 20: flits dropped (unsupported op or address)
-    EV_R0_FLIT     = 7 + 2 * SPM_PORTS,      // 21..23: NoC0 router flits per output (L, X, Y)
-    EV_R0_CSTALL   = 10 + 2 * SPM_PORTS,     // 24..26: per output, waiting with no credit
-    EV_R0_ARBLOSS  = 13 + 2 * SPM_PORTS,     // 27..29: per input, eligible but lost arbitration
-    EV_R0_BHOLD    = 16 + 2 * SPM_PORTS,     // 30..32: per output, entering flit held by the bubble rule
-    EV_NUM         = 19 + 2 * SPM_PORTS
+    EV_NIU_TX0     = 4 + 2 * SPM_PORTS,      // 18, 19: flits injected by the NIU on NoC0, NoC1
+    EV_NIU_TX1     = 5 + 2 * SPM_PORTS,
+    EV_NIU_RX0     = 6 + 2 * SPM_PORTS,      // 20, 21: flits retired by the NIU from NoC0, NoC1
+    EV_NIU_RX1     = 7 + 2 * SPM_PORTS,
+    EV_NIU_ERR     = 8 + 2 * SPM_PORTS,      // 22: cycles with a flit dropped (unsupported op or address)
+    EV_R0_FLIT     = 9 + 2 * SPM_PORTS,      // 23..25: NoC0 router flits per output (L, X, Y)
+    EV_R0_CSTALL   = 12 + 2 * SPM_PORTS,     // 26..28: per output, waiting with no credit
+    EV_R0_ARBLOSS  = 15 + 2 * SPM_PORTS,     // 29..31: per input, eligible but lost arbitration
+    EV_R0_BHOLD    = 18 + 2 * SPM_PORTS,     // 32..34: per output, entering flit held by the bubble rule
+    EV_R1_FLIT     = 21 + 2 * SPM_PORTS,     // 35..46: the same for the NoC1 router
+    EV_R1_CSTALL   = 24 + 2 * SPM_PORTS,
+    EV_R1_ARBLOSS  = 27 + 2 * SPM_PORTS,
+    EV_R1_BHOLD    = 30 + 2 * SPM_PORTS,
+    EV_NUM         = 33 + 2 * SPM_PORTS
   } perf_event_e;
   localparam int unsigned PERF_NFIX  = 2;
   localparam int unsigned PERF_NPROG = 8;
   // Selects after reset: the counters most runs want
   localparam logic [PERF_NPROG-1:0][7:0] PERF_DEFAULT_SEL = '{
-    8'(EV_R0_FLIT + 2), 8'(EV_R0_FLIT + 1), 8'(EV_R0_FLIT), 8'(EV_NIU_ERR),
-    8'(EV_NIU_RX), 8'(EV_NIU_TX), 8'(EV_DATA_STALL), 8'(EV_FETCH_STALL)
+    8'(EV_DENIED_0 + PORT_CORE_D), 8'(EV_NIU_ERR), 8'(EV_NIU_RX1), 8'(EV_NIU_RX0),
+    8'(EV_NIU_TX1), 8'(EV_NIU_TX0), 8'(EV_DATA_STALL), 8'(EV_FETCH_STALL)
   };
   localparam logic [11:0] PERF_SEL_BASE     = 12'h400;
   localparam logic [11:0] PERF_SNAP_BASE    = 12'h800;

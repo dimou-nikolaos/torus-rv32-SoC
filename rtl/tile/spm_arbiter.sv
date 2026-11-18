@@ -4,14 +4,20 @@
 //      requests again (the write half of an atomic read-modify-write).
 //   2. Promoted ports (denied STARVE_LIMIT consecutive cycles) win over all
 //      default priorities; several promoted ports are served round-robin.
-//   3. Default order: engine, NIU ports (round-robin), core data, core instruction.
+//   3. Default order: engine; the NIU's TX ports (TX-DMA, TX-reply), round-
+//      robin; its RX ports (RX0, RX1), round-robin; core data; core
+//      instruction. TX before RX: a read a TX stream loses is a cycle its
+//      flits never get back, and the gap it leaves in the receiver's stream
+//      shifts that stream back into bank conflicts; a write an RX stream loses
+//      waits in the ejection buffer's spare slot and the streams fall out of
+//      phase for good.
 //
 // Pure arbitration: one-hot grant per cycle, no data path.
-module spm_arbiter #(
-  parameter int unsigned NPORTS       = tile_pkg::SPM_PORTS,
+module spm_arbiter
+  import tile_pkg::*;
+#(
+  parameter int unsigned NPORTS       = SPM_PORTS,
   parameter int unsigned STARVE_LIMIT = 4,
-  parameter int unsigned RR_LO        = tile_pkg::NIU_PORT_LO,  // round-robin group
-  parameter int unsigned RR_HI        = tile_pkg::NIU_PORT_HI,
   localparam int unsigned PW          = $clog2(NPORTS),
   localparam int unsigned AGEW        = $clog2(STARVE_LIMIT + 1)
 ) (
@@ -26,13 +32,13 @@ module spm_arbiter #(
 );
   initial begin
     assert (STARVE_LIMIT >= 1) else $fatal(1, "STARVE_LIMIT must be >= 1");
-    assert (RR_LO <= RR_HI && RR_HI < NPORTS) else $fatal(1, "bad round-robin group");
+    assert (NPORTS == SPM_PORTS) else $fatal(1, "the default order names the tile's %0d ports", SPM_PORTS);
   end
 
   logic [AGEW-1:0]   age_q [NPORTS];
   logic              lock_q;
   logic [PW-1:0]     lock_port_q;
-  logic [PW-1:0]     rr_prom_q, rr_grp_q;   // last winner of each round-robin
+  logic [PW-1:0]     rr_prom_q, rr_tx_q, rr_rx_q;   // last winner of each round-robin
   logic [NPORTS-1:0] promoted;
 
   always_comb
@@ -57,32 +63,36 @@ module spm_arbiter #(
     return g;
   endfunction
 
-  logic [NPORTS-1:0] grp_mask;
-  always_comb
-    for (int i = 0; i < NPORTS; i++)
-      grp_mask[i] = (i >= RR_LO) && (i <= RR_HI);
+  logic [NPORTS-1:0] tx_mask, rx_mask;
+  always_comb begin
+    tx_mask = '0;
+    rx_mask = '0;
+    tx_mask[PORT_TXDMA] = 1'b1;
+    tx_mask[PORT_TXREP] = 1'b1;
+    rx_mask[PORT_RX0]   = 1'b1;
+    rx_mask[PORT_RX1]   = 1'b1;
+  end
 
-  logic use_prom;
+  logic use_prom, use_lock;
+  assign use_lock = lock_q && req_i[lock_port_q];
   always_comb begin
     gnt_o    = '0;
     use_prom = 1'b0;
-    if (lock_q && req_i[lock_port_q]) begin
+    if (use_lock) begin
       gnt_o[lock_port_q] = 1'b1;
     end else if (|promoted) begin
       use_prom = 1'b1;
       gnt_o    = rr_pick(promoted, 0, NPORTS - 1, rr_prom_q);
-    end else begin
-      for (int i = NPORTS - 1; i >= 0; i--) begin
-        // Fixed priority by index outside the group; the group competes as a
-        // whole at the priority of its lowest index.
-        if (req_i[i] && !grp_mask[i]) begin
-          gnt_o    = '0;
-          gnt_o[i] = 1'b1;
-        end
-        if (i == RR_LO && |(req_i & grp_mask)) begin
-          gnt_o = rr_pick(req_i & grp_mask, RR_LO, RR_HI, rr_grp_q);
-        end
-      end
+    end else if (req_i[PORT_ENGINE]) begin
+      gnt_o[PORT_ENGINE] = 1'b1;
+    end else if (|(req_i & tx_mask)) begin
+      gnt_o = rr_pick(req_i & tx_mask, PORT_TXDMA, PORT_TXREP, rr_tx_q);
+    end else if (|(req_i & rx_mask)) begin
+      gnt_o = rr_pick(req_i & rx_mask, PORT_RX0, PORT_RX1, rr_rx_q);
+    end else if (req_i[PORT_CORE_D]) begin
+      gnt_o[PORT_CORE_D] = 1'b1;
+    end else if (req_i[PORT_CORE_I]) begin
+      gnt_o[PORT_CORE_I] = 1'b1;
     end
   end
 
@@ -101,15 +111,16 @@ module spm_arbiter #(
       lock_q      <= 1'b0;
       lock_port_q <= '0;
       rr_prom_q   <= PW'(NPORTS - 1);
-      rr_grp_q    <= PW'(RR_HI);
+      rr_tx_q     <= PW'(PORT_TXREP);
+      rr_rx_q     <= PW'(PORT_RX1);
       for (int i = 0; i < NPORTS; i++) age_q[i] <= '0;
     end else begin
       // A lock lasts one cycle; it cannot chain.
       lock_q      <= |(gnt_o & lock_i) && !lock_q;
       lock_port_q <= idx_of(gnt_o);
-      if (use_prom && |gnt_o)                    rr_prom_q <= idx_of(gnt_o);
-      if (!use_prom && |(gnt_o & grp_mask) && !(lock_q && req_i[lock_port_q]))
-                                                 rr_grp_q  <= idx_of(gnt_o);
+      if (use_prom && |gnt_o)                                rr_prom_q <= idx_of(gnt_o);
+      if (!use_prom && !use_lock && |(gnt_o & tx_mask))      rr_tx_q   <= idx_of(gnt_o);
+      if (!use_prom && !use_lock && |(gnt_o & rx_mask))      rr_rx_q   <= idx_of(gnt_o);
       for (int i = 0; i < NPORTS; i++) begin
         if (req_i[i] && !gnt_o[i]) begin
           if (age_q[i] != AGEW'(STARVE_LIMIT)) age_q[i] <= age_q[i] + 1'b1;

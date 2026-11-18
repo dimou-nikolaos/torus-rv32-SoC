@@ -6,13 +6,17 @@
 
 #include "tile.h"
 
+static uint32_t plane_bits = NIU_CMD_PLANE(NIU_PLANE_AUTO);
+
+void noc_set_plane(uint32_t plane) { plane_bits = NIU_CMD_PLANE(plane); }
+
 void dma_write(int ch, uint32_t src, xy_t dst, uint32_t dst_addr, uint32_t len) {
   uint32_t base = NIU_CH(ch);
   mmio_write(base + NIU_SRC, src);
   mmio_write(base + NIU_DST_ADDR, dst_addr);
   mmio_write(base + NIU_DST_XY, (uint32_t)dst.x | (uint32_t)dst.y << 8);
   mmio_write(base + NIU_LEN, len);
-  mmio_write(base + NIU_CMD, NIU_OP_WRITE);
+  mmio_write(base + NIU_CMD, NIU_OP_WRITE | plane_bits);
 }
 
 void dma_read(xy_t src, uint32_t src_addr, uint32_t dst, uint32_t len) {
@@ -21,7 +25,7 @@ void dma_read(xy_t src, uint32_t src_addr, uint32_t dst, uint32_t len) {
   mmio_write(base + NIU_DST_ADDR, src_addr);
   mmio_write(base + NIU_DST_XY, (uint32_t)src.x | (uint32_t)src.y << 8);
   mmio_write(base + NIU_LEN, len);
-  mmio_write(base + NIU_CMD, NIU_OP_READ_REQ);
+  mmio_write(base + NIU_CMD, NIU_OP_READ_REQ | plane_bits);
 }
 
 static void atomic_inc(xy_t dst, uint32_t sem_addr, uint32_t n, uint32_t flags) {
@@ -29,7 +33,7 @@ static void atomic_inc(xy_t dst, uint32_t sem_addr, uint32_t n, uint32_t flags) 
   dma_wait(1);
   mmio_write(base + NIU_DST_ADDR, sem_addr);
   mmio_write(base + NIU_DST_XY, (uint32_t)dst.x | (uint32_t)dst.y << 8);
-  mmio_write(base + NIU_CMD, NIU_OP_ATOMIC_INC | flags | NIU_CMD_ARG(n));
+  mmio_write(base + NIU_CMD, NIU_OP_ATOMIC_INC | plane_bits | flags | NIU_CMD_ARG(n));
   dma_wait(1);
 }
 

@@ -4,9 +4,10 @@ A 2D torus of RV32IM tiles (CV32E40X) with scratchpads, DMA and a credit-based
 two-plane NoC, simulated in Verilator and synthesized in Yosys. The design,
 milestones and verification plan are in [SPEC.md](SPEC.md).
 
-Status: M2 done: the torus on NoC0 with an I/O row; programs are loaded and launched from C++
-(libtorus) through the I/O tile's AXI port; memcpy on 4x4 checked against the performance model.
-Next: M3 (second plane).
+Status: M3 in progress: both NoC planes (NoC0 east/south, NoC1 west/north) with an I/O row,
+every flit on the plane with fewer hops; programs are loaded and launched from C++ (libtorus)
+through the I/O tile's AXI port; memcpy on 4x4 checked against the performance model.
+Next: Cannon GEMM on 4x4.
 
 ## Topology
 
@@ -79,7 +80,8 @@ tools/dev.sh build/tb/soc/tb_soc_4x4 build/sw/hello.elf --axi-half=10   # slower
 
 # memcpy from C++ (libtorus), checked against the performance model
 tools/dev.sh model/perf_model.py run-memcpy --host build/tb/soc/host_memcpy_4x4 \
-    --elf build/sw/memcpy.elf --shift 1,1        # report in build/reports/
+    --elf build/sw/memcpy.elf --shift=1,1        # report in build/reports/
+# (--shift=-1,-1 runs on NoC1; host_memcpy --events=E0,..,E7 prints other counter events)
 
 # Regression: replay a run or one test from the printed seeds
 tools/dev.sh scripts/regress.py --seed 1234

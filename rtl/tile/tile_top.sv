@@ -1,6 +1,7 @@
 // Compute tile: core, scratchpad with the seven-port arbiter, tile control,
-// counter bank, console, NIU and the NoC0 router. The engine port of the
-// arbiter is tied off until M5; NoC1 arrives in M3.
+// counter bank, console, NIU and one router per plane (NoC0: in from W and N,
+// out to E and S; NoC1: in from E and S, out to W and N). The engine port of
+// the arbiter is tied off until M5.
 //
 // Remote register accesses to tile control and the counter bank come from the
 // NIU: RX writes and the reply engine's reads.
@@ -22,15 +23,15 @@ module tile_top
   input  logic [3:0]  coord_x_i,
   input  logic [3:0]  coord_y_i,
 
-  // NoC0 ring ports: X ring and Y ring, in and out
-  input  link_t       x_in_i,
-  output logic        x_in_credit_o,
-  output link_t       x_out_o,
-  input  logic        x_out_credit_i,
-  input  link_t       y_in_i,
-  output logic        y_in_credit_o,
-  output link_t       y_out_o,
-  input  logic        y_out_credit_i
+  // Ring ports per plane (0: NoC0, 1: NoC1): X ring and Y ring, in and out
+  input  link_t       x_in_i         [2],
+  output logic        x_in_credit_o  [2],
+  output link_t       x_out_o        [2],
+  input  logic        x_out_credit_i [2],
+  input  link_t       y_in_i         [2],
+  output logic        y_in_credit_o  [2],
+  output link_t       y_out_o        [2],
+  input  logic        y_out_credit_i [2]
 );
   // ------------------------------------------------------------------ core
   logic        run;
@@ -63,9 +64,8 @@ module tile_top
   spm_rsp_t spm_rsp [SPM_PORTS];
   logic [SPM_PORTS-1:0] spm_denied, spm_promoted;
 
-  // Engine (M5) and NoC1 receive (M3) are not connected yet
+  // The engine (M5) is not connected yet
   assign spm_req[PORT_ENGINE] = '0;
-  assign spm_req[PORT_RX1]    = '0;
 
   spm_banks #(.STARVE_LIMIT(STARVE_LIMIT)) u_spm (
     .clk_i, .rst_ni, .req_i(spm_req), .rsp_o(spm_rsp),
@@ -130,23 +130,25 @@ module tile_top
   assign data_err    = bad_q || tctrl_rsp.err || perf_rsp.err || console_rsp.err || niu_rsp.err;
   assign data_rdata  = dspm_rvalid ? dspm_rdata : tctrl_rsp.rdata | perf_rsp.rdata | niu_rsp.rdata;
 
-  // ------------------------------------------------------------ NIU, router
-  link_t inj, ej;
-  logic  inj_credit, ej_credit;
+  // ----------------------------------------------------------- NIU, routers
+  link_t inj [2], ej [2];
+  logic  inj_credit [2], ej_credit [2];
   logic  niu_rmt_req, niu_rmt_we;
   logic [31:0] niu_rmt_addr, niu_rmt_wdata;
   logic [3:0]  niu_rmt_be;
   logic  rmt_rvalid, rmt_err;
   logic [31:0] rmt_rdata;
   logic  doorbell;
-  logic  ev_tx, ev_rx, ev_err;
+  logic [1:0] ev_tx, ev_rx;
+  logic  ev_err;
 
   niu #(.GX(GX), .GY(GY), .IO_ROW(1'b1), .DEPTH(DEPTH), .RQ_NEEDED(NX * NY + IO_RD_OUTSTANDING)) u_niu (
     .clk_i, .rst_ni, .x_i(coord_t'(coord_x_i)), .y_i(coord_t'(coord_y_i)),
     .reg_req_i(niu_req), .reg_rsp_o(niu_rsp),
     .tx_spm_req_o (spm_req[PORT_TXDMA]), .tx_spm_rsp_i (spm_rsp[PORT_TXDMA]),
     .rep_spm_req_o(spm_req[PORT_TXREP]), .rep_spm_rsp_i(spm_rsp[PORT_TXREP]),
-    .rx_spm_req_o (spm_req[PORT_RX0]),   .rx_spm_rsp_i (spm_rsp[PORT_RX0]),
+    .rx0_spm_req_o(spm_req[PORT_RX0]),   .rx0_spm_rsp_i(spm_rsp[PORT_RX0]),
+    .rx1_spm_req_o(spm_req[PORT_RX1]),   .rx1_spm_rsp_i(spm_rsp[PORT_RX1]),
     .rmt_req_o(niu_rmt_req), .rmt_we_o(niu_rmt_we), .rmt_addr_o(niu_rmt_addr), .rmt_be_o(niu_rmt_be),
     .rmt_wdata_o(niu_rmt_wdata), .rmt_rvalid_i(rmt_rvalid), .rmt_err_i(rmt_err), .rmt_rdata_i(rmt_rdata),
     .doorbell_o(doorbell),
@@ -154,28 +156,30 @@ module tile_top
     .ev_tx_flit_o(ev_tx), .ev_rx_flit_o(ev_rx), .ev_error_o(ev_err)
   );
 
-  link_t r_in [NPORTS], r_out [NPORTS];
-  logic  r_cr_out [NPORTS], r_cr_in [NPORTS];
-  logic [NPORTS-1:0] r_ev_flit, r_ev_cstall, r_ev_bhold, r_ev_bubble, r_ev_arbloss;
-  assign r_in[IL] = inj;
-  assign r_in[IX] = x_in_i;
-  assign r_in[IY] = y_in_i;
-  assign inj_credit    = r_cr_out[IL];
-  assign x_in_credit_o = r_cr_out[IX];
-  assign y_in_credit_o = r_cr_out[IY];
-  assign ej      = r_out[IL];
-  assign x_out_o = r_out[IX];
-  assign y_out_o = r_out[IY];
-  assign r_cr_in[IL] = ej_credit;
-  assign r_cr_in[IX] = x_out_credit_i;
-  assign r_cr_in[IY] = y_out_credit_i;
+  logic [NPORTS-1:0] r_ev_flit [2], r_ev_cstall [2], r_ev_bhold [2], r_ev_bubble [2], r_ev_arbloss [2];
+  for (genvar p = 0; p < 2; p++) begin : g_plane
+    link_t r_in [NPORTS], r_out [NPORTS];
+    logic  r_cr_out [NPORTS], r_cr_in [NPORTS];
+    assign r_in[IL] = inj[p];
+    assign r_in[IX] = x_in_i[p];
+    assign r_in[IY] = y_in_i[p];
+    assign inj_credit[p]    = r_cr_out[IL];
+    assign x_in_credit_o[p] = r_cr_out[IX];
+    assign y_in_credit_o[p] = r_cr_out[IY];
+    assign ej[p]      = r_out[IL];
+    assign x_out_o[p] = r_out[IX];
+    assign y_out_o[p] = r_out[IY];
+    assign r_cr_in[IL] = ej_credit[p];
+    assign r_cr_in[IX] = x_out_credit_i[p];
+    assign r_cr_in[IY] = y_out_credit_i[p];
 
-  noc_router #(.DIR(1'b0), .GX(GX), .GY(GY), .DEPTH(DEPTH), .LINK_SLICE(LINK_SLICE)) u_r0 (
-    .clk_i, .rst_ni, .x_i(coord_t'(coord_x_i)), .y_i(coord_t'(coord_y_i)),
-    .in_i(r_in), .credit_o(r_cr_out), .out_o(r_out), .credit_i(r_cr_in),
-    .ev_flit_o(r_ev_flit), .ev_credit_stall_o(r_ev_cstall), .ev_bubble_hold_o(r_ev_bhold),
-    .ev_bubble_o(r_ev_bubble), .ev_arb_loss_o(r_ev_arbloss)
-  );
+    noc_router #(.DIR(p == 1), .GX(GX), .GY(GY), .DEPTH(DEPTH), .LINK_SLICE(LINK_SLICE)) u_router (
+      .clk_i, .rst_ni, .x_i(coord_t'(coord_x_i)), .y_i(coord_t'(coord_y_i)),
+      .in_i(r_in), .credit_o(r_cr_out), .out_o(r_out), .credit_i(r_cr_in),
+      .ev_flit_o(r_ev_flit[p]), .ev_credit_stall_o(r_ev_cstall[p]), .ev_bubble_hold_o(r_ev_bhold[p]),
+      .ev_bubble_o(r_ev_bubble[p]), .ev_arb_loss_o(r_ev_arbloss[p])
+    );
+  end
 
   // ----------------------------------------------------------- remote port
   reg_req_t rmt_tctrl_req, rmt_perf_req;
@@ -219,13 +223,19 @@ module tile_top
     perf_ev[EV_DATA_STALL]  = ev_data_stall;
     perf_ev[EV_DENIED_0   +: SPM_PORTS] = spm_denied;
     perf_ev[EV_PROMOTED_0 +: SPM_PORTS] = spm_promoted;
-    perf_ev[EV_NIU_TX]                  = ev_tx;
-    perf_ev[EV_NIU_RX]                  = ev_rx;
+    perf_ev[EV_NIU_TX0]                 = ev_tx[0];
+    perf_ev[EV_NIU_TX1]                 = ev_tx[1];
+    perf_ev[EV_NIU_RX0]                 = ev_rx[0];
+    perf_ev[EV_NIU_RX1]                 = ev_rx[1];
     perf_ev[EV_NIU_ERR]                 = ev_err;
-    perf_ev[EV_R0_FLIT    +: NPORTS]    = r_ev_flit;
-    perf_ev[EV_R0_CSTALL  +: NPORTS]    = r_ev_cstall;
-    perf_ev[EV_R0_ARBLOSS +: NPORTS]    = r_ev_arbloss;
-    perf_ev[EV_R0_BHOLD   +: NPORTS]    = r_ev_bhold;
+    perf_ev[EV_R0_FLIT    +: NPORTS]    = r_ev_flit[0];
+    perf_ev[EV_R0_CSTALL  +: NPORTS]    = r_ev_cstall[0];
+    perf_ev[EV_R0_ARBLOSS +: NPORTS]    = r_ev_arbloss[0];
+    perf_ev[EV_R0_BHOLD   +: NPORTS]    = r_ev_bhold[0];
+    perf_ev[EV_R1_FLIT    +: NPORTS]    = r_ev_flit[1];
+    perf_ev[EV_R1_CSTALL  +: NPORTS]    = r_ev_cstall[1];
+    perf_ev[EV_R1_ARBLOSS +: NPORTS]    = r_ev_arbloss[1];
+    perf_ev[EV_R1_BHOLD   +: NPORTS]    = r_ev_bhold[1];
   end
 
   counter_bank #(.NEV(EV_NUM), .NFIX(PERF_NFIX), .NPROG(PERF_NPROG), .DEFAULT_SEL(PERF_DEFAULT_SEL)) u_perf (
@@ -241,7 +251,8 @@ module tile_top
 
   /* verilator lint_off UNUSEDSIGNAL */
   logic unused;
-  assign unused = ^{cycle, core_sleep, console_rsp.rdata, data_addr[13:12] == 2'b00 && d_mmio, r_ev_bubble,
+  assign unused = ^{cycle, core_sleep, console_rsp.rdata, data_addr[13:12] == 2'b00 && d_mmio, r_ev_bubble[0],
+                    r_ev_bubble[1],
                     rmt_tctrl_rsp.rvalid, rmt_perf_rsp.rvalid};
   /* verilator lint_on UNUSEDSIGNAL */
 

@@ -50,6 +50,17 @@ constexpr uint32_t kPerfSel = 0x400, kPerfSnap = 0x800, kPerfNum = 0xFF0, kPerfC
 constexpr uint32_t kPerfSnapshot = 1, kPerfClear = 2;
 constexpr uint32_t kIoDone = 0x000, kIoInfo = 0x100, kIoCycles = 0x104;
 
+// Counter bank events, the values of the select registers (rtl/pkg/tile_pkg.sv,
+// perf_event_e; sw/sdk/tile.h). Router events come per output port (L, X, Y),
+// arbitration losses per input port.
+enum PerfEvent : unsigned {
+  kEvFetchStall = 2, kEvDataStall = 3, kEvDenied0 = 4, kEvPromoted0 = 11,
+  kEvNiuTx0 = 18, kEvNiuTx1 = 19, kEvNiuRx0 = 20, kEvNiuRx1 = 21, kEvNiuErr = 22,
+  kEvR0Flit = 23, kEvR0CStall = 26, kEvR0ArbLoss = 29, kEvR0BHold = 32,
+  kEvR1Flit = 35, kEvR1CStall = 38, kEvR1ArbLoss = 41, kEvR1BHold = 44, kEvNum = 47,
+};
+constexpr unsigned kPortL = 0, kPortX = 1, kPortY = 2;
+
 struct Program {
   std::vector<Xy> tiles;
   std::vector<ElfImage> images;   // one per tile, in the order of tiles

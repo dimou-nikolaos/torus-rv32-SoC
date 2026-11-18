@@ -39,12 +39,12 @@ enum {
   // Programmable counters as selected after reset
   PERF_C_FETCH_STALL = 2,
   PERF_C_DATA_STALL = 3,
-  PERF_C_NIU_TX = 4,
-  PERF_C_NIU_RX = 5,
-  PERF_C_NIU_ERR = 6,
-  PERF_C_R0_FLIT_L = 7,
-  PERF_C_R0_FLIT_X = 8,
-  PERF_C_R0_FLIT_Y = 9,
+  PERF_C_NIU_TX0 = 4,
+  PERF_C_NIU_TX1 = 5,
+  PERF_C_NIU_RX0 = 6,
+  PERF_C_NIU_RX1 = 7,
+  PERF_C_NIU_ERR = 8,
+  PERF_C_CORE_D_DENIED = 9,
   // Register offsets
   PERF_SEL_BASE = 0x400,
   PERF_SNAP_BASE = 0x800,
@@ -63,14 +63,20 @@ enum {
   PERF_EV_DATA_STALL = 3,
   PERF_EV_DENIED_0 = 4,     // 4..10 per arbiter port
   PERF_EV_PROMOTED_0 = 11,  // 11..17 per arbiter port
-  PERF_EV_NIU_TX = 18,
-  PERF_EV_NIU_RX = 19,
-  PERF_EV_NIU_ERR = 20,
-  PERF_EV_R0_FLIT = 21,     // 21..23 NoC0 router flits per output (L, X, Y)
-  PERF_EV_R0_CSTALL = 24,   // 24..26 per output: waiting, no credit
-  PERF_EV_R0_ARBLOSS = 27,  // 27..29 per input: lost arbitration
-  PERF_EV_R0_BHOLD = 30,    // 30..32 per output: entering flit held by the bubble rule
-  PERF_NUM_EVENTS = 33,
+  PERF_EV_NIU_TX0 = 18,     // flits injected on NoC0
+  PERF_EV_NIU_TX1 = 19,     // ... on NoC1
+  PERF_EV_NIU_RX0 = 20,     // flits retired from NoC0
+  PERF_EV_NIU_RX1 = 21,     // ... from NoC1
+  PERF_EV_NIU_ERR = 22,     // cycles with a flit dropped
+  PERF_EV_R0_FLIT = 23,     // 23..25 NoC0 router flits per output (L, X, Y)
+  PERF_EV_R0_CSTALL = 26,   // 26..28 per output: waiting, no credit
+  PERF_EV_R0_ARBLOSS = 29,  // 29..31 per input: lost arbitration
+  PERF_EV_R0_BHOLD = 32,    // 32..34 per output: entering flit held by the bubble rule
+  PERF_EV_R1_FLIT = 35,     // 35..46 the same for the NoC1 router
+  PERF_EV_R1_CSTALL = 38,
+  PERF_EV_R1_ARBLOSS = 41,
+  PERF_EV_R1_BHOLD = 44,
+  PERF_NUM_EVENTS = 47,
 };
 
 static inline uint32_t mmio_read(uint32_t addr) { return *(volatile uint32_t *)addr; }
@@ -163,6 +169,12 @@ static inline uint32_t niu_status(int ch) { return mmio_read(NIU_CH(ch) + NIU_ST
 
 #define NIU_CMD_DOORBELL (1u << 5)              // ATOMIC_INC: also ring the target's doorbell
 #define NIU_CMD_ARG(n)   ((uint32_t)(n) << 16)    // ATOMIC_INC: the increment
+// Plane: automatic (fewer hops, ties to NoC0; fixed per source and destination,
+// so flits between two tiles keep their order), or forced
+#define NIU_PLANE_AUTO   0u
+#define NIU_PLANE_NOC0   1u
+#define NIU_PLANE_NOC1   2u
+#define NIU_CMD_PLANE(p) ((uint32_t)(p) << 3)
 
 // DMA (SPEC.md, Ordering and completion). Addresses and lengths are multiples
 // of 16; every call returns at once and the channel stays busy until done.
@@ -186,7 +198,13 @@ static inline void sem_wait(volatile uint32_t *sem, uint32_t value) {
 // Every earlier write from this tile to dst is visible at dst when this returns
 // (a 16-byte READ_REQ round trip on channel 0). Not for the I/O tile.
 void noc_fence(xy_t dst);
+// The compute tile dx, dy away on the NX x NY compute torus (wrapping over the
+// compute grid only: the I/O row is skipped)
 xy_t neighbor(int dx, int dy);
+// The plane every dma_*, sem_* and noc_fence call of this program uses
+// (NIU_PLANE_*, default automatic). Forcing NoC0 for all traffic keeps the
+// ordering rules (one plane per pair still) and measures a one-plane NoC.
+void noc_set_plane(uint32_t plane);
 
 // Kernel entry, called by crt0 with the mailbox address.
 typedef struct args args_t;

@@ -27,10 +27,13 @@ using namespace torus;
 
 namespace {
 
-// Counter indices, with the selects the counter bank has after reset
-enum { C_CYCLES = 0, C_RETIRED = 1, C_FETCH = 2, C_DATA = 3, C_NIU_TX = 4, C_NIU_RX = 5, C_NIU_ERR = 6,
-       C_R0_FLIT = 7 };
-const char* kCounterNames[] = {"cycles", "retired", "fetch_stall", "data_stall"};
+// Counter indices, with the selects the counter bank has after reset (the
+// programs may rely on them, so the testbench keeps them)
+enum { C_CYCLES = 0, C_RETIRED = 1, C_FETCH = 2, C_DATA = 3, C_NIU_TX0 = 4, C_NIU_TX1 = 5, C_NIU_RX0 = 6,
+       C_NIU_RX1 = 7, C_NIU_ERR = 8, C_CORE_D_DENIED = 9 };
+const char* kCounterNames[] = {"cycles", "retired", "fetch_stall", "data_stall", "tx0", "tx1", "rx0", "rx1",
+                               "err", "core_d_denied"};
+constexpr uint32_t kIoErrors = 0x114;
 constexpr uint32_t kIoRxFlits = 0x11C;
 
 #define CHECK(c, ...)                                  \
@@ -96,7 +99,7 @@ int main(int argc, char** argv) {
       std::string bad = dev.verify(prog);
       CHECK(bad.empty(), "image readback: %s", bad.c_str());
     }
-    uint32_t io_rx0 = dev.io_read32(kIoRxFlits);
+    uint32_t io_rx0 = dev.io_read32(kIoRxFlits), io_err0 = dev.io_read32(kIoErrors);
     uint64_t t0 = sim.cycles();
     dev.launch(prog);
 
@@ -104,7 +107,7 @@ int main(int argc, char** argv) {
     while (dev.done_count() < (uint32_t)n && !sim.failed()) sim.run(100);
     run_cycles = sim.cycles() - t0;
     sim.run(300);
-    uint32_t io_rx1 = dev.io_read32(kIoRxFlits);
+    uint32_t io_rx1 = dev.io_read32(kIoRxFlits), io_err1 = dev.io_read32(kIoErrors);
     dev.stop(prog);
     if (sim.failed()) status = 1;
 
@@ -125,17 +128,11 @@ int main(int argc, char** argv) {
       const auto& c = snap[i];
       CHECK(c == live[i], "tile %d: snapshot differs from the live counters with the core stopped", i);
       printf("counters tile %d,%d:", i % nx, i / nx);
-      for (size_t k = 0; k < c.size(); k++) {
-        if (k < 4) printf(" %s=%llu", kCounterNames[k], (unsigned long long)c[k]);
-        else if (c[k]) printf(" c%zu=%llu", k, (unsigned long long)c[k]);
-      }
+      for (size_t k = 0; k < c.size(); k++) printf(" %s=%llu", kCounterNames[k], (unsigned long long)c[k]);
       printf("\n");
-      sum_tx += c[C_NIU_TX];
-      sum_rx += c[C_NIU_RX];
+      sum_tx += c[C_NIU_TX0] + c[C_NIU_TX1];
+      sum_rx += c[C_NIU_RX0] + c[C_NIU_RX1];
       sum_err += c[C_NIU_ERR];
-      // Every flit the NIU retired passed this router's ejection output
-      CHECK(c[C_R0_FLIT] == c[C_NIU_RX], "tile %d: router ejected %llu flits, NIU retired %llu", i,
-            (unsigned long long)c[C_R0_FLIT], (unsigned long long)c[C_NIU_RX]);
       CHECK(c[C_RETIRED] <= c[C_CYCLES], "tile %d: retired %llu > cycles %llu", i,
             (unsigned long long)c[C_RETIRED], (unsigned long long)c[C_CYCLES]);
       if (st.sw_cleared) {
@@ -155,13 +152,13 @@ int main(int argc, char** argv) {
     }
     // Every flit sent while the cores ran arrived at a tile or the I/O tile.
     // Each tile also retires one flit nobody sent while it runs: the host's
-    // stop write.
+    // stop write. No NIU errors anywhere, the I/O tile included.
     uint64_t io_rx = io_rx1 - io_rx0;
-    CHECK(sum_tx + (uint64_t)n == sum_rx + io_rx && sum_err == 0,
+    CHECK(sum_tx + (uint64_t)n == sum_rx + io_rx && sum_err == 0 && io_err1 == io_err0,
           "NoC: %llu flits injected, %llu retired by tiles (including %d stop writes), %llu by the I/O tile, "
-          "%llu NIU errors",
+          "%llu NIU errors, %u I/O errors",
           (unsigned long long)sum_tx, (unsigned long long)sum_rx, n, (unsigned long long)io_rx,
-          (unsigned long long)sum_err);
+          (unsigned long long)sum_err, io_err1 - io_err0);
   } catch (const std::exception& e) {
     fprintf(stderr, "ERROR: %s\n", e.what());
     status = 1;

@@ -6,7 +6,9 @@
 // (model/perf_model.py).
 //
 //   host_memcpy <memcpy.elf> [--len=BYTES] [--shift=DX,DY] [--report=FILE]
-//               [SimHost options: --seed, --cycles, --trace, --no-cosim, ...]
+//               [--events=E0,..,E7] [SimHost options: --seed, --cycles, --trace, --no-cosim, ...]
+// --events selects other counter events (tile_pkg.sv perf_event_e) than the
+// ones the model checks, for investigations; they are printed per tile.
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -24,6 +26,10 @@ using namespace torus;
 namespace {
 
 constexpr uint32_t kSrc = 0x4000, kDst = 0x8000, kSem = 0xF000, kResult = 0xF010;
+// Counters 2..9 count these (the model maps them by event number)
+const std::vector<unsigned> kModelSelects = {kEvNiuTx0, kEvNiuTx1, kEvNiuRx0, kEvNiuRx1,
+                                        kEvR0Flit + kPortX, kEvR0Flit + kPortY, kEvR1Flit + kPortX,
+                                        kEvR1Flit + kPortY};
 
 struct Args {
   uint32_t src, dst, len, partner, senders, sem, result;
@@ -59,6 +65,17 @@ int main(int argc, char** argv) {
     for (Xy t : grid) senders[index(partner(t))]++;
 
     Program prog = dev.load_kernel(args.positional[0], grid);
+    std::vector<unsigned> selects = kModelSelects;
+    if (args.flag("events")) {
+      selects.clear();
+      std::string e = args.opt("events");
+      for (size_t pos = 0; pos < e.size();) {
+        size_t c = e.find(',', pos);
+        selects.push_back((unsigned)std::stoul(e.substr(pos, c - pos)));
+        pos = c == std::string::npos ? e.size() : c + 1;
+      }
+    }
+    dev.select_counters(grid, selects);
     if (!args.flag("no-cosim"))
       for (unsigned i = 0; i < n; i++) sim.attach_cosim((int)i, prog.images[i]);
     std::vector<std::vector<uint8_t>> src(n, std::vector<uint8_t>(len));
@@ -111,6 +128,14 @@ int main(int argc, char** argv) {
       last = std::max(last, tm[2]);
     }
     uint32_t copy = last - first;
+    if (args.flag("events"))
+      for (Xy t : grid) {
+        printf("tile %u,%u t=[%u %u %u] events", t.x, t.y, times[index(t)][0] - first, times[index(t)][1] - first,
+               times[index(t)][2] - first);
+        for (size_t k = 0; k < selects.size(); k++)
+          printf(" %u:%llu", selects[k], (unsigned long long)counters[index(t)][2 + k]);
+        printf("\n");
+      }
     printf("memcpy %ux%u, %u bytes per tile, shift (%d,%d): copy phase %u cycles (%.2f bytes/cycle per tile), "
            "run %llu cycles\n",
            nx, ny, len, sx, sy, copy, (double)len / copy, (unsigned long long)run);
@@ -125,8 +150,10 @@ int main(int argc, char** argv) {
       if (!f) throw std::runtime_error("cannot write " + args.opt("report"));
       fprintf(f, "{\n  \"kernel\": \"memcpy\", \"nx\": %u, \"ny\": %u, \"len\": %u, \"shift\": [%d, %d],\n", nx, ny,
               len, sx, sy);
-      fprintf(f, "  \"copy_cycles\": %u, \"run_cycles\": %llu, \"seed\": %llu,\n  \"tiles\": [\n", copy,
+      fprintf(f, "  \"copy_cycles\": %u, \"run_cycles\": %llu, \"seed\": %llu,\n  \"events\": [", copy,
               (unsigned long long)run, (unsigned long long)args.seed);
+      for (size_t k = 0; k < selects.size(); k++) fprintf(f, "%s%u", k ? ", " : "", selects[k]);
+      fprintf(f, "],\n  \"tiles\": [\n");
       for (Xy t : grid) {
         unsigned i = index(t);
         Xy p = partner(t);

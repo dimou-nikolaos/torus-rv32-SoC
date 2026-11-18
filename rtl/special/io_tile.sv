@@ -2,7 +2,7 @@
 // two asynchronous FIFOs (requests in, read beats out; the design's only clock
 // crossing), the AXI-to-NoC bridge with its network interface, and the
 // register block with the host semaphores. Sits at (IO_X, IO_Y) in the I/O row
-// and drives the local port of that position's router.
+// and drives the local ports of that position's routers, one per plane.
 module io_tile
   import noc_pkg::*;
   import io_pkg::*;
@@ -51,10 +51,10 @@ module io_tile
   // Fabric clock domain
   input  logic              clk_i,
   input  logic              rst_ni,
-  output link_t             inj_o,
-  input  logic              inj_credit_i,
-  input  link_t             ej_i,
-  output logic              ej_credit_o
+  output link_t             inj_o        [2],   // per plane (0: NoC0, 1: NoC1)
+  input  logic              inj_credit_i [2],
+  input  link_t             ej_i         [2],
+  output logic              ej_credit_o  [2]
 );
   io_req_t req_w, req_r;
   io_rsp_t rsp_w, rsp_r;
@@ -92,7 +92,7 @@ module io_tile
   logic [31:0]  rx_inc_val;
   logic         ev_wr, ev_rd, ev_rsp, ev_err, ev_rx;
 
-  io_bridge #(.DEPTH(DEPTH), .OUT(OUT)) u_bridge (
+  io_bridge #(.GX(GX), .GY(GY), .DEPTH(DEPTH), .OUT(OUT)) u_bridge (
     .clk_i, .rst_ni, .x_i(coord_t'(IO_X)), .y_i(coord_t'(IO_Y)),
     .req_i(req_r), .req_empty_i(req_empty), .req_pop_o(req_pop),
     .rsp_push_o(rsp_push), .rsp_o(rsp_w), .rsp_full_i(rsp_full),

@@ -1,8 +1,9 @@
 // Grid generator (SPEC.md, Baseline architecture): an NX x NY torus of compute
-// tiles plus the I/O row, on NoC0. The router grid is GX x GY with GX = NX and
-// GY = NY + 1; row y = NY is the I/O row, part of every Y ring. Each node's X
-// ring output feeds the next node east, its Y ring output the next node south,
-// wrapping around, with LINK_SLICE register slices on every link.
+// tiles plus the I/O row, on two planes. The router grid is GX x GY with GX = NX
+// and GY = NY + 1; row y = NY is the I/O row, part of every Y ring. On NoC0 each
+// node's X ring output feeds the next node east and its Y ring output the next
+// node south; on NoC1 west and north. Rings wrap around, with LINK_SLICE
+// register slices on every link.
 //
 // The I/O row holds the I/O tile at (0, NY), whose AXI slave port is the
 // design's boundary (in its own clock domain), and router-only stops (router,
@@ -61,46 +62,65 @@ module soc_top
   localparam int unsigned DEPTH = credit_rtt(LINK_SLICE) + 1;
   localparam int unsigned IO_X  = 0;
 
-  link_t x_out [G], y_out [G], x_in [G], y_in [G];
-  logic  x_out_cr [G], y_out_cr [G], x_in_cr [G], y_in_cr [G];
+  // Per plane p and node g
+  link_t x_out [2][G], y_out [2][G], x_in [2][G], y_in [2][G];
+  logic  x_out_cr [2][G], y_out_cr [2][G], x_in_cr [2][G], y_in_cr [2][G];
 
   for (genvar y = 0; y < GY; y++) begin : g_y
     for (genvar x = 0; x < GX; x++) begin : g_x
-      localparam int unsigned g  = y * GX + x;
-      localparam int unsigned XP = y * GX + (x + GX - 1) % GX;   // node feeding our X input
-      localparam int unsigned YP = ((y + GY - 1) % GY) * GX + x; // node feeding our Y input
+      localparam int unsigned g = y * GX + x;
 
       if (y < NY) begin : g_tile
+        link_t xi [2], xo [2], yi [2], yo [2];
+        logic  xic [2], xoc [2], yic [2], yoc [2];
+        for (genvar p = 0; p < 2; p++) begin : g_p
+          assign xi[p] = x_in[p][g];
+          assign yi[p] = y_in[p][g];
+          assign xoc[p] = x_out_cr[p][g];
+          assign yoc[p] = y_out_cr[p][g];
+          assign x_out[p][g]  = xo[p];
+          assign y_out[p][g]  = yo[p];
+          assign x_in_cr[p][g] = xic[p];
+          assign y_in_cr[p][g] = yic[p];
+        end
         tile_top #(.NX(NX), .NY(NY), .LINK_SLICE(LINK_SLICE), .IO_RD_OUTSTANDING(IO_RD_OUTSTANDING)) u_tile (
           .clk_i, .rst_ni, .coord_x_i(4'(x)), .coord_y_i(4'(y)),
-          .x_in_i(x_in[g]), .x_in_credit_o(x_in_cr[g]), .x_out_o(x_out[g]), .x_out_credit_i(x_out_cr[g]),
-          .y_in_i(y_in[g]), .y_in_credit_o(y_in_cr[g]), .y_out_o(y_out[g]), .y_out_credit_i(y_out_cr[g])
+          .x_in_i(xi), .x_in_credit_o(xic), .x_out_o(xo), .x_out_credit_i(xoc),
+          .y_in_i(yi), .y_in_credit_o(yic), .y_out_o(yo), .y_out_credit_i(yoc)
         );
       end else begin : g_io
-        // I/O row: the I/O tile's router, or a router-only stop
+        // I/O row: the I/O tile's routers, or router-only stops
         localparam bit IO = x == IO_X;
-        link_t r_in [NPORTS], r_out [NPORTS];
-        logic  r_cr_out [NPORTS], r_cr_in [NPORTS];
-        logic [NPORTS-1:0] ev_flit, ev_cstall, ev_bhold, ev_bubble, ev_arbloss;
-        link_t inj;
-        logic  ej_credit;
-        assign r_in[IL]    = inj;
-        assign r_in[IX]    = x_in[g];
-        assign r_in[IY]    = y_in[g];
-        assign x_in_cr[g]  = r_cr_out[IX];
-        assign y_in_cr[g]  = r_cr_out[IY];
-        assign x_out[g]    = r_out[IX];
-        assign y_out[g]    = r_out[IY];
-        assign r_cr_in[IL] = ej_credit;
-        assign r_cr_in[IX] = x_out_cr[g];
-        assign r_cr_in[IY] = y_out_cr[g];
-        noc_router #(.DIR(1'b0), .GX(GX), .GY(GY), .DEPTH(DEPTH), .LINK_SLICE(LINK_SLICE),
-                     .HAS_LOCAL(IO)) u_router (
-          .clk_i, .rst_ni, .x_i(coord_t'(x)), .y_i(coord_t'(y)),
-          .in_i(r_in), .credit_o(r_cr_out), .out_o(r_out), .credit_i(r_cr_in),
-          .ev_flit_o(ev_flit), .ev_credit_stall_o(ev_cstall), .ev_bubble_hold_o(ev_bhold),
-          .ev_bubble_o(ev_bubble), .ev_arb_loss_o(ev_arbloss)
-        );
+        link_t inj [2], ej [2];
+        logic  inj_cr [2], ej_cr [2];
+        for (genvar p = 0; p < 2; p++) begin : g_p
+          link_t r_in [NPORTS], r_out [NPORTS];
+          logic  r_cr_out [NPORTS], r_cr_in [NPORTS];
+          logic [NPORTS-1:0] ev_flit, ev_cstall, ev_bhold, ev_bubble, ev_arbloss;
+          assign r_in[IL]       = inj[p];
+          assign r_in[IX]       = x_in[p][g];
+          assign r_in[IY]       = y_in[p][g];
+          assign x_in_cr[p][g]  = r_cr_out[IX];
+          assign y_in_cr[p][g]  = r_cr_out[IY];
+          assign x_out[p][g]    = r_out[IX];
+          assign y_out[p][g]    = r_out[IY];
+          assign inj_cr[p]      = r_cr_out[IL];
+          assign ej[p]          = r_out[IL];
+          assign r_cr_in[IL]    = ej_cr[p];
+          assign r_cr_in[IX]    = x_out_cr[p][g];
+          assign r_cr_in[IY]    = y_out_cr[p][g];
+          noc_router #(.DIR(p == 1), .GX(GX), .GY(GY), .DEPTH(DEPTH), .LINK_SLICE(LINK_SLICE),
+                       .HAS_LOCAL(IO)) u_router (
+            .clk_i, .rst_ni, .x_i(coord_t'(x)), .y_i(coord_t'(y)),
+            .in_i(r_in), .credit_o(r_cr_out), .out_o(r_out), .credit_i(r_cr_in),
+            .ev_flit_o(ev_flit), .ev_credit_stall_o(ev_cstall), .ev_bubble_hold_o(ev_bhold),
+            .ev_bubble_o(ev_bubble), .ev_arb_loss_o(ev_arbloss)
+          );
+          /* verilator lint_off UNUSEDSIGNAL */
+          logic unused;
+          assign unused = ^{ev_flit, ev_cstall, ev_bhold, ev_bubble, ev_arbloss};
+          /* verilator lint_on UNUSEDSIGNAL */
+        end
         if (IO) begin : g_io_tile
           io_tile #(.GX(GX), .GY(GY), .IO_X(IO_X), .IO_Y(NY), .DEPTH(DEPTH), .OUT(IO_RD_OUTSTANDING),
                     .IDW(IDW)) u_io (
@@ -111,29 +131,33 @@ module soc_top
             .s_axi_bready_i, .s_axi_arid_i, .s_axi_araddr_i, .s_axi_arlen_i, .s_axi_arsize_i,
             .s_axi_arburst_i, .s_axi_arvalid_i, .s_axi_arready_o, .s_axi_rid_o, .s_axi_rdata_o,
             .s_axi_rresp_o, .s_axi_rlast_o, .s_axi_rvalid_o, .s_axi_rready_i,
-            .clk_i, .rst_ni, .inj_o(inj), .inj_credit_i(r_cr_out[IL]), .ej_i(r_out[IL]),
-            .ej_credit_o(ej_credit)
+            .clk_i, .rst_ni, .inj_o(inj), .inj_credit_i(inj_cr), .ej_i(ej), .ej_credit_o(ej_cr)
           );
         end else begin : g_stop
-          assign inj       = '0;
-          assign ej_credit = 1'b0;
+          for (genvar p = 0; p < 2; p++) begin : g_p
+            assign inj[p]   = '0;
+            assign ej_cr[p] = 1'b0;
+          end
           /* verilator lint_off UNUSEDSIGNAL */
           logic unused_local;
-          assign unused_local = ^{r_out[IL], r_cr_out[IL]};
+          assign unused_local = ^{ej[0], ej[1], inj_cr[0], inj_cr[1]};
           /* verilator lint_on UNUSEDSIGNAL */
         end
-        /* verilator lint_off UNUSEDSIGNAL */
-        logic unused;
-        assign unused = ^{ev_flit, ev_cstall, ev_bhold, ev_bubble, ev_arbloss};
-        /* verilator lint_on UNUSEDSIGNAL */
       end
 
-      link_slice #(.DEPTH(LINK_SLICE)) u_xlink (
-        .clk_i, .rst_ni, .fwd_i(x_out[XP]), .fwd_o(x_in[g]), .credit_i(x_in_cr[g]), .credit_o(x_out_cr[XP])
-      );
-      link_slice #(.DEPTH(LINK_SLICE)) u_ylink (
-        .clk_i, .rst_ni, .fwd_i(y_out[YP]), .fwd_o(y_in[g]), .credit_i(y_in_cr[g]), .credit_o(y_out_cr[YP])
-      );
+      // Links into this node, from the node before it on each ring
+      for (genvar p = 0; p < 2; p++) begin : g_link
+        localparam int unsigned XP = p == 0 ? y * GX + (x + GX - 1) % GX : y * GX + (x + 1) % GX;
+        localparam int unsigned YP = p == 0 ? ((y + GY - 1) % GY) * GX + x : ((y + 1) % GY) * GX + x;
+        link_slice #(.DEPTH(LINK_SLICE)) u_xlink (
+          .clk_i, .rst_ni, .fwd_i(x_out[p][XP]), .fwd_o(x_in[p][g]), .credit_i(x_in_cr[p][g]),
+          .credit_o(x_out_cr[p][XP])
+        );
+        link_slice #(.DEPTH(LINK_SLICE)) u_ylink (
+          .clk_i, .rst_ni, .fwd_i(y_out[p][YP]), .fwd_o(y_in[p][g]), .credit_i(y_in_cr[p][g]),
+          .credit_o(y_out_cr[p][YP])
+        );
+      end
     end
   end
 endmodule

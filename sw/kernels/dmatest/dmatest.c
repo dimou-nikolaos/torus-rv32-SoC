@@ -78,7 +78,7 @@ int kernel_main(const args_t *args) {
     {(uint32_t)src_b, (uint32_t)dst_b, 0, 16, 7},                      // reserved op
     {0xFFF0u, (uint32_t)dst_b, 0, 32, NIU_OP_READ_REQ},                // read landing past the scratchpad
     {(uint32_t)src_b, (uint32_t)dst_b + 2, 0, 16, NIU_OP_ATOMIC_INC},  // atomic not word-aligned
-    {(uint32_t)src_b, (uint32_t)dst_b, 0, 16, NIU_OP_WRITE | 2u << 3}, // NoC1 forced: not before M3
+    {(uint32_t)src_b, (uint32_t)dst_b, 0, 16, NIU_OP_WRITE | NIU_CMD_PLANE(3)}, // reserved plane
   };
   for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++) {
     uint32_t base = NIU_CH(0), before = NIU_STATUS_DONE(niu_status(0));
@@ -116,6 +116,7 @@ int kernel_main(const args_t *args) {
   CHECK(memcmp(dst_a, src_a, BIG) == 0);
 
   printf("dmatest OK on tile (%u,%u): %lu flits sent, %lu received\n", me.x, me.y,
-         (unsigned long)perf_read(PERF_C_NIU_TX), (unsigned long)perf_read(PERF_C_NIU_RX));
+         (unsigned long)(perf_read(PERF_C_NIU_TX0) + perf_read(PERF_C_NIU_TX1)),
+         (unsigned long)(perf_read(PERF_C_NIU_RX0) + perf_read(PERF_C_NIU_RX1)));
   return perf_read(PERF_C_NIU_ERR) == 0 ? 0 : 1;
 }
