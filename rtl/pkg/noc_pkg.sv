@@ -72,4 +72,22 @@ package noc_pkg;
     return P_LOCAL;
   endfunction
 
+  // Hops from a to b on a one-way ring of length n going +1 (NoC0)
+  function automatic int unsigned ring_dist(coord_t a, coord_t b, int unsigned n);
+    return (b >= a) ? int'(b) - int'(a) : int'(b) + int'(n) - int'(a);
+  endfunction
+
+  // Plane of a flit from (sx, sy) to (dx, dy) on a gx x gy router grid, a fixed
+  // function of source and destination (SPEC.md, plane selection): the plane
+  // with fewer hops, ties to NoC0. 0 = NoC0, 1 = NoC1.
+  function automatic logic select_plane(coord_t sx, coord_t sy, coord_t dx, coord_t dy,
+                                        int unsigned gx, int unsigned gy);
+    int unsigned hx, hy, h0, h1;
+    hx = ring_dist(sx, dx, gx);
+    hy = ring_dist(sy, dy, gy);
+    h0 = hx + hy;
+    h1 = (hx == 0 ? 0 : gx - hx) + (hy == 0 ? 0 : gy - hy);
+    return h1 < h0;
+  endfunction
+
 endpackage

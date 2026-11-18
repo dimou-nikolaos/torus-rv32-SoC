@@ -1,16 +1,22 @@
-// Bare-plane NoC test (SPEC.md, Verification strategy: NoC; full-throughput rule).
+// Bare NoC test (SPEC.md, Verification strategy: NoC; full-throughput rule).
 //
-// Endpoints at every node inject and eject; the transaction-level model gives
-// each flit's path. Checks, in every phase:
-//   - exactly-once delivery at the right node, in order per (source, destination);
+// One plane (N_PLANES = 1, direction N_DIR) or both (N_PLANES = 2): endpoints
+// at every node inject and eject, each flit on the plane select_plane() gives
+// its source and destination, as every NIU does; the transaction-level model
+// gives each flit's path. With N_IO_ROW, row GY-1 is the I/O row: only (0, GY-1)
+// has an endpoint, the other positions are router-only stops inside the Y rings.
+// Checks, in every phase:
+//   - exactly-once delivery at the right node on the right plane, in order per
+//     (source, destination);
 //   - per-link flit counts equal the model's exactly at the end;
 //   - zero bubbles; the deadlock watchdog never fires (no flit moves anywhere for
 //     WATCHDOG cycles while flits are in flight -> dump and fail).
 // Phases: zero-load latency for every source/destination pair (exact), uniform
-// random with backpressure, transpose, hotspot, neighbor permutation on X and
-// on Y (every ring link at 100%), a stream across the diameter (1 flit/cycle),
-// and a saturating soak with heavy backpressure. --soak=N sets the soak length;
-// --expect-deadlock inverts the result for the BUBBLE=0 build.
+// random with backpressure, transpose, hotspot, neighbor permutations along
+// every ring direction (every link they use at 100%), a stream across the
+// diameter (1 flit/cycle), and a saturating soak with heavy backpressure.
+// --soak=N sets the soak length; --expect-deadlock inverts the result for the
+// BUBBLE=0 build.
 #include <verilated.h>
 #include <verilated_fst_c.h>
 
@@ -18,6 +24,7 @@
 #include <memory>
 #include <random>
 #include <set>
+#include <type_traits>
 #include <vector>
 
 #include "Vtb_noc_top.h"
@@ -38,9 +45,17 @@ using namespace torus;
 #ifndef N_SLICE
 #define N_SLICE 0
 #endif
+#ifndef N_PLANES
+#define N_PLANES 1
+#endif
+#ifndef N_IO_ROW
+#define N_IO_ROW 0
+#endif
 
 namespace {
 constexpr int kGX = N_GX, kGY = N_GY, kN = kGX * kGY, kDir = N_DIR, kSlice = N_SLICE;
+constexpr int kP = N_PLANES, kK = kP * kN;
+constexpr bool kIoRow = N_IO_ROW;
 constexpr uint64_t kWatchdog = 2000;
 const char* kPortName[] = {"L", "X", "Y"};
 
@@ -66,23 +81,28 @@ Flit get_flit(const W& vec, int n) {
   return Flit::unpack(w);
 }
 
-template <typename W>
-bool get_bit(const W& vec, int bit) { return vec[bit / 32] >> (bit % 32) & 1; }
-inline bool get_bit(uint64_t v, int bit) { return v >> bit & 1; }
-inline bool get_bit(uint32_t v, int bit) { return v >> bit & 1; }
-inline bool get_bit(uint16_t v, int bit) { return v >> bit & 1; }
-inline bool get_bit(uint8_t v, int bit) { return v >> bit & 1; }
-
-template <typename W>
-void set_bit(W& vec, int bit, bool v) {
-  if (v) vec[bit / 32] |= 1u << (bit % 32);
-  else vec[bit / 32] &= ~(1u << (bit % 32));
+// One bit of a Verilator port, scalar (up to 64 bits) or wide
+template <typename T>
+bool get_bit(const T& v, int bit) {
+  if constexpr (std::is_integral_v<T>) return v >> bit & 1;
+  else return v[bit / 32] >> (bit % 32) & 1;
 }
 template <typename T>
-void set_scalar_bit(T& v, int bit, bool b) {
-  if (b) v |= (T)1 << bit;
-  else v &= ~((T)1 << bit);
+void set_bit(T& v, int bit, bool b) {
+  if constexpr (std::is_integral_v<T>) {
+    if (b) v |= (T)1 << bit;
+    else v &= ~((T)1 << bit);
+  } else {
+    if (b) v[bit / 32] |= 1u << (bit % 32);
+    else v[bit / 32] &= ~(1u << (bit % 32));
+  }
 }
+
+// Nodes with an endpoint: all but the router-only stops of the I/O row
+bool endpoint(int n) { return !(kIoRow && n / kGX == kGY - 1 && n % kGX != 0); }
+// Plane index (0..kP-1) of a flow, and the ring direction of each plane index
+int plane_of(int s, int d) { return kP == 2 ? select_plane(kGX, kGY, s % kGX, s / kGX, d % kGX, d / kGX) : 0; }
+int dir_of(int p) { return kP == 2 ? p : kDir; }
 
 struct Inflight {
   int src, dst;
@@ -122,28 +142,33 @@ int main(int argc, char** argv) {
   dut->rst_ni = 1;
   ctx->assertOn(true);
 
-  NocTlm tlm(kGX, kGY, kDir, kSlice);
+  std::vector<int> eps;
+  for (int n = 0; n < kN; n++) if (endpoint(n)) eps.push_back(n);
+  auto random_ep = [&]() { return eps[rng() % eps.size()]; };
+
+  std::vector<NocTlm> tlm;
+  for (int p = 0; p < kP; p++) tlm.emplace_back(kGX, kGY, dir_of(p), kSlice);
   std::map<uint32_t, Inflight> inflight;
   std::map<std::pair<int, int>, uint32_t> last_id;
-  std::vector<std::vector<uint64_t>> rtl_links(kN, std::vector<uint64_t>(kPorts, 0));
-  std::vector<Flit> pending(kN);
-  std::vector<bool> have(kN, false);
+  std::vector<std::vector<uint64_t>> rtl_links(kK, std::vector<uint64_t>(kPorts, 0));
+  // Per node: the next flit, then per plane the flit its sender offers
+  std::vector<Flit> next(kN), pending(kK);
+  std::vector<bool> have_next(kN, false), have(kK, false);
   uint32_t next_id = 1;
   uint64_t t = 0, idle = 0, delivered = 0, holds = 0;
-  int deadlocked = 0;
+  uint64_t per_plane[2] = {0, 0};
 
   // Per-cycle driver. dst_of(n) returns the destination node for a new flit at
-  // n, or -1 for none; pop_p is the probability of popping a waiting flit.
-  // Optional hooks observe each delivery.
-  std::vector<uint64_t> win_links(kN * kPorts, 0);
+  // endpoint n, or -1 for none; pop_p is the probability of popping a waiting flit.
+  std::vector<uint64_t> win_links(kK * kPorts, 0);
   bool win_on = false;
   uint64_t win_cycles = 0, win_ejected = 0;
   int latency_probe_id = -1;
   int64_t latency_seen = -1;
 
   auto cycle = [&](auto dst_of, int pop_pct) -> int {
-    for (int n = 0; n < kN; n++) {
-      if (!have[n]) {
+    for (int n : eps) {
+      if (!have_next[n]) {
         int d = dst_of(n);
         if (d >= 0) {
           Flit f;
@@ -156,57 +181,71 @@ int main(int argc, char** argv) {
           f.be = 0xffff;
           f.data[0] = next_id++;
           f.data[1] = (uint32_t)rng();
-          pending[n] = f;
-          have[n] = true;
+          next[n] = f;
+          have_next[n] = true;
         }
       }
-      set_scalar_bit(dut->src_valid_i, n, have[n]);
-      put_flit(dut->src_flit_i, n, pending[n]);
-      bool pop = (int)(rng() % 100) < pop_pct;
-      set_scalar_bit(dut->pop_i, n, pop);
+      if (have_next[n]) {
+        int k = plane_of(n, next[n].dst_y * kGX + next[n].dst_x) * kN + n;
+        if (!have[k]) {
+          pending[k] = next[n];
+          have[k] = true;
+          have_next[n] = false;
+        }
+      }
+    }
+    for (int k = 0; k < kK; k++) {
+      set_bit(dut->src_valid_i, k, have[k]);
+      put_flit(dut->src_flit_i, k, pending[k]);
+      set_bit(dut->pop_i, k, (int)(rng() % 100) < pop_pct);
     }
     half(0);
 
     bool progress = false;
     // Router events
-    for (int n = 0; n < kN; n++)
+    for (int k = 0; k < kK; k++)
       for (int p = 0; p < kPorts; p++) {
-        int bit = n * kPorts + p;
+        int bit = k * kPorts + p;
         if (get_bit(dut->ev_flit_o, bit)) {
-          rtl_links[n][p]++;
+          rtl_links[k][p]++;
           progress = true;
           if (win_on) win_links[bit]++;
         }
-        TB_CHECK(!get_bit(dut->ev_bubble_o, bit), "t=%llu bubble at node %d port %s", (unsigned long long)t, n,
-                 kPortName[p]);
+        TB_CHECK(!get_bit(dut->ev_bubble_o, bit), "t=%llu bubble at plane %d node %d port %s",
+                 (unsigned long long)t, k / kN, k % kN, kPortName[p]);
         holds += get_bit(dut->ev_bubble_hold_o, bit);
       }
     // Deliveries
-    for (int n = 0; n < kN; n++) {
-      if (!get_bit(dut->pop_i, n) || !get_bit(dut->rx_valid_o, n)) continue;
-      Flit f = get_flit(dut->rx_head_o, n);
+    for (int k = 0; k < kK; k++) {
+      if (!get_bit(dut->pop_i, k) || !get_bit(dut->rx_valid_o, k)) continue;
+      int n = k % kN, pl = k / kN;
+      Flit f = get_flit(dut->rx_head_o, k);
       uint32_t id = f.data[0];
       auto it = inflight.find(id);
       TB_CHECK(it != inflight.end(), "t=%llu node %d: flit %u delivered twice or never sent", (unsigned long long)t,
                n, id);
       TB_CHECK(it->second.dst == n, "t=%llu flit %u for node %d ejected at node %d", (unsigned long long)t, id,
                it->second.dst, n);
+      TB_CHECK(plane_of(it->second.src, n) == pl, "t=%llu flit %u %d->%d ejected on plane index %d",
+               (unsigned long long)t, id, it->second.src, n, pl);
       auto key = std::make_pair(it->second.src, n);
       TB_CHECK(id > last_id[key], "t=%llu flit %u out of order on %d->%d", (unsigned long long)t, id,
                it->second.src, n);
       last_id[key] = id;
       if ((int)id == latency_probe_id) latency_seen = (int64_t)(t - it->second.sent_at);
-      tlm.deliver(it->second.src % kGX, it->second.src / kGX, n % kGX, n / kGX);
+      tlm[pl].deliver(it->second.src % kGX, it->second.src / kGX, n % kGX, n / kGX);
+      per_plane[pl]++;
       inflight.erase(it);
       delivered++;
       progress = true;
       if (win_on) win_ejected++;
     }
     // Sends
-    for (int n = 0; n < kN; n++)
-      if (get_bit(dut->src_taken_o, n)) {
-        inflight[pending[n].data[0]] = {n, pending[n].dst_y * kGX + pending[n].dst_x, t};
-        have[n] = false;
+    for (int k = 0; k < kK; k++)
+      if (get_bit(dut->src_taken_o, k)) {
+        TB_CHECK(endpoint(k % kN), "t=%llu send from router-only stop %d", (unsigned long long)t, k % kN);
+        inflight[pending[k].data[0]] = {k % kN, pending[k].dst_y * kGX + pending[k].dst_x, t};
+        have[k] = false;
         progress = true;
       }
     half(1);
@@ -214,28 +253,33 @@ int main(int argc, char** argv) {
     if (win_on) win_cycles++;
     idle = (progress || inflight.empty()) ? 0 : idle + 1;
     if (idle > kWatchdog) {
-      deadlocked = 1;
       fprintf(stderr, "WATCHDOG: no flit moved for %llu cycles with %zu in flight (t=%llu)\n",
               (unsigned long long)kWatchdog, inflight.size(), (unsigned long long)t);
       std::map<int, int> per_dst;
       for (auto& [id, f] : inflight) per_dst[f.dst]++;
       for (auto& [d, c] : per_dst) fprintf(stderr, "  %d flits in flight to node %d\n", c, d);
-      for (int n = 0; n < kN; n++)
+      for (int k = 0; k < kK; k++)
         for (int p = 0; p < kPorts; p++)
-          if (get_bit(dut->ev_credit_stall_o, n * kPorts + p))
-            fprintf(stderr, "  node %d (%d,%d) output %s: waiting, no credit\n", n, n % kGX, n / kGX, kPortName[p]);
+          if (get_bit(dut->ev_credit_stall_o, k * kPorts + p))
+            fprintf(stderr, "  plane %d node %d (%d,%d) output %s: waiting, no credit\n", dir_of(k / kN), k % kN,
+                    k % kN % kGX, k % kN / kGX, kPortName[p]);
       return 2;
     }
     return ctx->gotError() ? 1 : 0;
   };
 
   auto none = [](int) { return -1; };
+  auto sources_pending = [&]() {
+    for (int n = 0; n < kN; n++) if (have_next[n]) return true;
+    for (int k = 0; k < kK; k++) if (have[k]) return true;
+    return false;
+  };
   auto drain = [&]() -> int {
     for (int i = 0; i < 2000 && !inflight.empty(); i++) {
       int r = cycle(none, 100);
       if (r) return r;
     }
-    for (int n = 0; n < kN; n++) if (have[n]) return 0;  // pending sources still drain next phase
+    if (sources_pending()) return 0;  // pending sources still drain next phase
     return inflight.empty() ? 0 : 3;
   };
   auto finish = [&](int r) -> int {
@@ -257,15 +301,15 @@ int main(int argc, char** argv) {
 
   // 1. Zero-load latency, every source/destination pair, exact
   if (!expect_deadlock) {
-    for (int s = 0; s < kN; s++)
-      for (int d = 0; d < kN; d++) {
+    for (int s : eps)
+      for (int d : eps) {
         bool sent = false;
         latency_probe_id = (int)next_id;
         latency_seen = -1;
         auto one = [&](int n) { if (n == s && !sent) { sent = true; return d; } return -1; };
         RUN(cycle(one, 100));
         for (int i = 0; i < 200 && latency_seen < 0; i++) RUN(cycle(none, 100));
-        int want = tlm.zero_load_latency(s % kGX, s / kGX, d % kGX, d / kGX);
+        int want = tlm[plane_of(s, d)].zero_load_latency(s % kGX, s / kGX, d % kGX, d / kGX);
         TB_CHECK(latency_seen == want, "zero-load latency %d -> %d: %lld cycles, model %d", s, d,
                  (long long)latency_seen, want);
       }
@@ -274,47 +318,67 @@ int main(int argc, char** argv) {
   // 2. Uniform random with random backpressure
   for (uint64_t i = 0; i < args.cycles; i++) {
     int rate = (i / 2000) % 2 ? 30 : 90, pop = (i / 3000) % 2 ? 40 : 95;
-    RUN(cycle([&](int) { return (int)(rng() % 100) < rate ? (int)(rng() % kN) : -1; }, pop));
+    RUN(cycle([&](int) { return (int)(rng() % 100) < rate ? random_ep() : -1; }, pop));
   }
   RUN(drain());
 
   // 3. Transpose and 4. hotspot
-  if (kGX == kGY)
+  if (kGX == kGY && !kIoRow)
     for (uint64_t i = 0; i < args.cycles / 2; i++)
       RUN(cycle([&](int n) { return (rng() % 100) < 80 ? (n % kGX) * kGX + n / kGX : -1; }, 90));
   RUN(drain());
-  int hot = (int)(rng() % kN);
+  int hot = random_ep();
   for (uint64_t i = 0; i < args.cycles / 2; i++)
     RUN(cycle([&](int) { return (rng() % 100) < 50 ? hot : -1; }, 100));
   RUN(drain());
 
-  // 5. Neighbor permutation on X, then on Y: every ring link at 100%
+  // 5. Neighbor permutations along every ring direction the planes have:
+  // every endpoint row (or column) streams to its next one; with the I/O row
+  // the compute rows wrap over it. Every link a single flow uses runs at 100%.
   if (!expect_deadlock) {
-    for (int dim = 0; dim < 2; dim++) {
-      int ring = dim == 0 ? kGX : kGY;
-      if (ring < 2) continue;
-      auto nb = [&](int n) {
-        int x = n % kGX, y = n / kGX;
-        if (dim == 0) x = ring_next((uint8_t)x, kGX, kDir);
-        else y = ring_next((uint8_t)y, kGY, kDir);
-        return y * kGX + x;
-      };
-      for (int i = 0; i < 200; i++) RUN(cycle(nb, 100));
-      std::fill(win_links.begin(), win_links.end(), 0);
-      win_cycles = 0;
-      win_on = true;
-      for (int i = 0; i < 2000; i++) RUN(cycle(nb, 100));
-      win_on = false;
-      for (int n = 0; n < kN; n++) {
-        double r = (double)win_links[n * kPorts + (dim == 0 ? kX : kY)] / win_cycles;
-        TB_CHECK(r > 0.999, "neighbor permutation %s: node %d link at %.3f", dim ? "Y" : "X", n, r);
+    const int rows = kIoRow ? kGY - 1 : kGY;
+    for (int p = 0; p < kP; p++)
+      for (int dim = 0; dim < 2; dim++) {
+        int dir = dir_of(p);
+        if ((dim == 0 ? kGX : rows) < 2) continue;
+        auto nb = [&](int n) {
+          int x = n % kGX, y = n / kGX;
+          if (y >= rows) return -1;   // the I/O tile stays idle
+          if (dim == 0) x = ring_next((uint8_t)x, kGX, dir);
+          else y = ring_next((uint8_t)y, rows, dir);
+          return y * kGX + x;
+        };
+        // Flows per link, from the model's paths
+        std::map<int, int> flows;
+        for (int n : eps) {
+          int d = nb(n);
+          if (d < 0) continue;
+          int pl = plane_of(n, d);
+          for (auto [node, port] : tlm[pl].path(n % kGX, n / kGX, d % kGX, d / kGX))
+            flows[(pl * kN + node) * kPorts + port]++;
+        }
+        for (int i = 0; i < 200; i++) RUN(cycle(nb, 100));
+        std::fill(win_links.begin(), win_links.end(), 0);
+        win_cycles = 0;
+        win_on = true;
+        for (int i = 0; i < 2000; i++) RUN(cycle(nb, 100));
+        win_on = false;
+        for (auto [bit, f] : flows) {
+          double r = (double)win_links[bit] / win_cycles;
+          int k = bit / kPorts;
+          TB_CHECK(f == 1 && r > 0.999, "neighbor permutation dir %d %s: plane %d node %d port %s carries %d flows "
+                   "at %.3f", dir, dim ? "Y" : "X", dir_of(k / kN), k % kN, kPortName[bit % kPorts], f, r);
+        }
+        RUN(drain());
       }
-      RUN(drain());
-    }
 
     // 6. One stream across the diameter: 1 flit/cycle at the destination
-    int far = (kDir == 0) ? (kGY - 1) * kGX + (kGX - 1) : 0;
-    int src = (kDir == 0) ? 0 : kN - 1;
+    int src = eps[0], far = eps[0], best = -1;
+    for (int s : eps)
+      for (int d : eps) {
+        int h = tlm[plane_of(s, d)].hops(s % kGX, s / kGX, d % kGX, d / kGX);
+        if (h > best) { best = h; src = s; far = d; }
+      }
     auto stream = [&](int n) { return n == src ? far : -1; };
     for (int i = 0; i < 200; i++) RUN(cycle(stream, 100));
     win_ejected = 0;
@@ -322,29 +386,32 @@ int main(int argc, char** argv) {
     win_on = true;
     for (int i = 0; i < 2000; i++) RUN(cycle(stream, 100));
     win_on = false;
-    TB_CHECK((double)win_ejected / win_cycles > 0.999, "diameter stream at %.3f flits/cycle",
-             (double)win_ejected / win_cycles);
+    TB_CHECK((double)win_ejected / win_cycles > 0.999, "diameter stream %d -> %d (%d hops) at %.3f flits/cycle", src,
+             far, best, (double)win_ejected / win_cycles);
     RUN(drain());
   }
 
-  // 7. Saturating soak: every node always sends, ejection heavily backpressured
+  // 7. Saturating soak: every endpoint always sends, ejection heavily backpressured
   for (uint64_t i = 0; i < soak; i++) {
     int pop = (i / 5000) % 2 ? 10 : 60;
-    RUN(cycle([&](int) { return (int)(rng() % kN); }, pop));
+    RUN(cycle([&](int) { return random_ep(); }, pop));
   }
   RUN(drain());
   // Let the last pending sources go
   for (int i = 0; i < 2000; i++) RUN(cycle(none, 100));
 
   if (expect_deadlock) return finish(0);
-  TB_CHECK(inflight.empty(), "%zu flits never delivered", inflight.size());
-  for (int n = 0; n < kN; n++)
+  TB_CHECK(inflight.empty() && !sources_pending(), "%zu flits never delivered", inflight.size());
+  for (int k = 0; k < kK; k++)
     for (int p = 0; p < kPorts; p++)
-      TB_CHECK(rtl_links[n][p] == tlm.link_count(n, p), "link node %d port %s: rtl %llu flits, model %llu", n,
-               kPortName[p], (unsigned long long)rtl_links[n][p], (unsigned long long)tlm.link_count(n, p));
+      TB_CHECK(rtl_links[k][p] == tlm[k / kN].link_count(k % kN, p),
+               "link plane %d node %d port %s: rtl %llu flits, model %llu", dir_of(k / kN), k % kN, kPortName[p],
+               (unsigned long long)rtl_links[k][p], (unsigned long long)tlm[k / kN].link_count(k % kN, p));
   if (tfp) tfp->close();
-  (void)deadlocked;
-  printf("tb_noc: PASS %dx%d dir=%d slice=%d delivered=%llu cycles=%llu bubble_holds=%llu\n", kGX, kGY, kDir,
-         kSlice, (unsigned long long)delivered, (unsigned long long)t, (unsigned long long)holds);
+  printf("tb_noc: PASS %dx%d planes=%d%s dir=%d slice=%d delivered=%llu (NoC%d %llu, NoC1 %llu) cycles=%llu "
+         "bubble_holds=%llu\n",
+         kGX, kGY, kP, kIoRow ? " io_row" : "", kDir, kSlice, (unsigned long long)delivered, kP == 2 ? 0 : kDir,
+         (unsigned long long)per_plane[0], (unsigned long long)per_plane[1], (unsigned long long)t,
+         (unsigned long long)holds);
   return 0;
 }

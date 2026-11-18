@@ -56,9 +56,13 @@ def discover(args):
     for d in (0, 1):
         for sl in (0, 1, 2):
             tests.append(Test(f"unit.router.p{d}_s{sl}", [str(BUILD / f"tb/unit/tb_router_p{d}_s{sl}")]))
-    for cfg in ("2x2_p0_s0", "2x2_p1_s0", "4x4_p0_s0", "4x4_p1_s1", "4x4_p0_s2", "3x5_p0_s0"):
+    for cfg in ("2x2_p0_s0", "2x2_p1_s0", "4x4_p0_s0", "4x4_p1_s1", "4x4_p0_s2", "3x5_p0_s0", "3x5_p1_s0",
+                "4x4_p01_s0", "2x3_p01_s0_io", "4x5_p01_s0_io", "4x5_p01_s1_io", "3x4_p01_s2_io"):
         tests.append(Test(f"noc.{cfg}", [str(BUILD / f"tb/unit/tb_noc_{cfg}")]))
     tests.append(Test("noc.soak_4x4", [str(BUILD / "tb/unit/tb_noc_4x4_p0_s0"), "--soak=2000000"], timeout=1200))
+    # Both planes with the I/O row, as in the 4x4 SoC
+    tests.append(Test("noc.soak_4x5_p01_io", [str(BUILD / "tb/unit/tb_noc_4x5_p01_s0_io"), "--soak=2000000"],
+                      timeout=1200))
     # Without the bubble rule the torus must deadlock and the watchdog must see it
     for cfg in ("3x3_p0_s0", "4x4_p0_s0"):
         tests.append(Test(f"noc.{cfg}_nobubble_deadlocks",

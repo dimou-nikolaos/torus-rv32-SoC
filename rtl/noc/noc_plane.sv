@@ -1,6 +1,8 @@
 // One NoC plane: a GX x GY torus of noc_router, one-way rings in the plane's
 // direction, LINK_SLICE register slices on every router-to-router link. The
-// local ports are the plane's boundary (NIUs, or testbench endpoints).
+// local ports are the plane's boundary (NIUs, or testbench endpoints). With
+// IO_ROW, row GY-1 is the I/O row: only (0, GY-1) has a local port, the other
+// positions are router-only stops.
 module noc_plane
   import noc_pkg::*;
 #(
@@ -10,6 +12,7 @@ module noc_plane
   parameter int unsigned LINK_SLICE = 0,
   parameter int unsigned DEPTH      = credit_rtt(LINK_SLICE) + 1,
   parameter bit          BUBBLE     = 1'b1,
+  parameter bit          IO_ROW     = 1'b0,
   localparam int unsigned N         = GX * GY   // node n = y * GX + x
 ) (
   input  logic  clk_i,
@@ -40,10 +43,11 @@ module noc_plane
       // The router feeding this one on each ring
       localparam int unsigned XP = DIR ? (x + 1) % GX : (x + GX - 1) % GX;
       localparam int unsigned YP = DIR ? (y + 1) % GY : (y + GY - 1) % GY;
+      localparam bit HAS_LOCAL = !(IO_ROW && y == GY - 1 && x != 0);
       logic [NPORTS-1:0] ev_al;
 
       noc_router #(.DIR(DIR), .GX(GX), .GY(GY), .DEPTH(DEPTH), .LINK_SLICE(LINK_SLICE),
-                   .BUBBLE(BUBBLE)) u_router (
+                   .HAS_LOCAL(HAS_LOCAL), .BUBBLE(BUBBLE)) u_router (
         .clk_i, .rst_ni, .x_i(coord_t'(x)), .y_i(coord_t'(y)),
         .in_i(in_l[n]), .credit_o(cr_out[n]), .out_o(out_l[n]), .credit_i(cr_in[n]),
         .ev_flit_o(ev_flit_o[n]), .ev_credit_stall_o(ev_credit_stall_o[n]),

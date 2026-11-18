@@ -1,7 +1,8 @@
-// Transaction-level model of one NoC plane (SPEC.md, Verification strategy):
+// Transaction-level model of the NoC (SPEC.md, Verification strategy):
 // deterministic X-first paths on one-way rings. For every flit it gives the
 // router outputs it crosses (so per-link flit counts can be compared exactly
-// with the RTL), its hop count and its zero-load latency.
+// with the RTL), its hop count and its zero-load latency. NocTlm is one plane;
+// select_plane() is the fixed plane choice of every NIU (noc_pkg::select_plane).
 #pragma once
 #include <map>
 #include <vector>
@@ -9,6 +10,14 @@
 #include "router_model.h"
 
 namespace torus {
+
+// Plane of a flit from (sx, sy) to (dx, dy) on a gx x gy router grid: the one
+// with fewer hops, ties to NoC0 (0 = NoC0 east/south, 1 = NoC1 west/north)
+inline int select_plane(int gx, int gy, int sx, int sy, int dx, int dy) {
+  int hx = (dx - sx + gx) % gx, hy = (dy - sy + gy) % gy;
+  int h0 = hx + hy, h1 = (gx - hx) % gx + (gy - hy) % gy;
+  return h1 < h0 ? 1 : 0;
+}
 
 class NocTlm {
  public:
