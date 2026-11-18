@@ -4,10 +4,10 @@ A 2D torus of RV32IM tiles (CV32E40X) with scratchpads, DMA and a credit-based
 two-plane NoC, simulated in Verilator and synthesized in Yosys. The design,
 milestones and verification plan are in [SPEC.md](SPEC.md).
 
-Status: M3 in progress: both NoC planes (NoC0 east/south, NoC1 west/north) with an I/O row,
-every flit on the plane with fewer hops; programs are loaded and launched from C++ (libtorus)
-through the I/O tile's AXI port; memcpy on 4x4 checked against the performance model.
-Next: Cannon GEMM on 4x4.
+Status: M3 done: both NoC planes (NoC0 east/south, NoC1 west/north) with an I/O row, every
+flit on the plane with fewer hops; programs are loaded and launched from C++ (libtorus) through
+the I/O tile's AXI port; memcpy and Cannon GEMM on 4x4 checked against the performance model.
+Next: M4 (scale to 8x8).
 
 ## Topology
 
@@ -83,8 +83,15 @@ tools/dev.sh model/perf_model.py run-memcpy --host build/tb/soc/host_memcpy_4x4 
     --elf build/sw/memcpy.elf --shift=1,1        # report in build/reports/
 # (--shift=-1,-1 runs on NoC1; host_memcpy --events=E0,..,E7 prints other counter events)
 
+# Cannon GEMM (int32, N=64 on 4x4), checked bit-exact and against the model
+# calibrated on a 1x1 run; --plane=noc0 puts all kernel traffic on one plane
+tools/dev.sh model/perf_model.py run-cannon --host build/tb/soc/host_cannon_4x4 \
+    --cal-host build/tb/soc/host_cannon_1x1 --elf build/sw/cannon.elf --n 64
+tools/dev.sh model/perf_model.py planes      # one plane against two: build/reports/planes.md
+
 # Regression: replay a run or one test from the printed seeds
 tools/dev.sh scripts/regress.py --seed 1234
+tools/dev.sh scripts/regress.py --long --no-build     # adds Cannon N=128 and the plane comparison
 tools/dev.sh scripts/regress.py -k isa --no-build
 tools/dev.sh build/tb/unit/tb_spm --seed=42
 

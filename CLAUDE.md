@@ -77,3 +77,11 @@ TORUS_IMAGE=torus-tools:local tools/dev.sh scripts/regress.py --no-build --seed 
 - Head-of-line blocking: one input buffer per router port, so a turning flow
   stalls a continuing flow behind it; contended patterns run slower than an
   even link split (memcpy shift 2,2 on 4x4).
+- Bank arbiter order is TX ports before RX ports on purpose: with one
+  round-robin group a DMA read losing to an RX write leaves a gap that shifts
+  the partner's incoming stream back into conflict (2x2 memcpy lost 10%).
+- The two RX paths retire independently: a testbench that predicts memory or
+  reply order must keep each plane's writes apart (tb_niu gives each plane
+  its own half of the written regions) and queue replies at READ_REQ retire.
+- Revert a mutation with the inverse edit, never `git checkout <file>`: it
+  also throws away the uncommitted work in that file.
