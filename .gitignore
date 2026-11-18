@@ -1,4 +1,5 @@
 build/
+build-trace/
 *.fst
 *.vcd
 __pycache__/

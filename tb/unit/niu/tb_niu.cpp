@@ -29,7 +29,6 @@
 //     with DMA and replies on different planes.
 #include <svdpi.h>
 #include <verilated.h>
-#include <verilated_fst_c.h>
 
 #include <deque>
 #include <memory>
@@ -42,6 +41,7 @@
 #include "noc_tlm.h"
 #include "router_model.h"
 #include "tb_args.h"
+#include "tb_trace.h"
 
 using namespace torus;
 
@@ -137,17 +137,12 @@ int main(int argc, char** argv) {
   auto ctx = std::make_unique<VerilatedContext>();
   ctx->randSeed((int)(args.seed & 0x7fffffff));
   auto dut = std::make_unique<Vtb_niu_top>(ctx.get());
-  std::unique_ptr<VerilatedFstC> tfp;
-  if (!args.trace.empty()) {
-    ctx->traceEverOn(true);
-    tfp = std::make_unique<VerilatedFstC>();
-    dut->trace(tfp.get(), 99);
-    tfp->open(args.trace.c_str());
-  }
+  TbTrace tfp;
+  tfp.open(ctx.get(), dut.get(), args.trace);
   auto half = [&](int clk) {
     dut->clk_i = clk;
     dut->eval();
-    if (tfp) tfp->dump(ctx->time());
+    tfp.dump(ctx->time());
     ctx->timeInc(1);
   };
   dut->x_i = kMeX;
@@ -829,7 +824,7 @@ int main(int argc, char** argv) {
     memcpy(&m, &mem[a], 4);
     TB_CHECK(w == m, "memory at %04x: rtl %08x model %08x", a, w, m);
   }
-  if (tfp) tfp->close();
+  tfp.close();
   printf("tb_niu: PASS commands=%llu (%llu bad, %llu forced plane) tx_flits=%llu+%llu reply_flits=%llu+%llu "
          "rx_flits=%llu+%llu (read_reqs=%llu atomics=%llu reg_writes=%llu dropped=%llu)\n",
          (unsigned long long)cmds, (unsigned long long)bad_cmds, (unsigned long long)n_forced,

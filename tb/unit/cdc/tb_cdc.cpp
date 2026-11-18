@@ -5,13 +5,13 @@
 // the RTL asserts no push while full and no pop while empty. With both sides
 // always willing, the throughput must reach the slower clock's rate.
 #include <verilated.h>
-#include <verilated_fst_c.h>
 
 #include <memory>
 #include <random>
 
 #include "Vtb_cdc_top.h"
 #include "tb_args.h"
+#include "tb_trace.h"
 
 int main(int argc, char** argv) {
   TbArgs args = TbArgs::parse(argc, argv, 400000);
@@ -20,13 +20,8 @@ int main(int argc, char** argv) {
   ctx->randReset(2);
   ctx->randSeed((int)(args.seed & 0x7fffffff));
   auto dut = std::make_unique<Vtb_cdc_top>(ctx.get());
-  std::unique_ptr<VerilatedFstC> tfp;
-  if (!args.trace.empty()) {
-    ctx->traceEverOn(true);
-    tfp = std::make_unique<VerilatedFstC>();
-    dut->trace(tfp.get(), 99);
-    tfp->open(args.trace.c_str());
-  }
+  TbTrace tfp;
+  tfp.open(ctx.get(), dut.get(), args.trace);
 
   // Clocks: half periods in time units, next edge times
   uint64_t now = 0;
@@ -38,7 +33,7 @@ int main(int argc, char** argv) {
 
   auto eval = [&]() {
     dut->eval();
-    if (tfp) tfp->dump(now);
+    tfp.dump(now);
   };
 
   ctx->assertOn(false);
@@ -129,7 +124,7 @@ int main(int argc, char** argv) {
   for (int i = 0; i < 10000 && rseq != wseq; i++)
     if (step()) return 1;
   TB_CHECK(rseq == wseq && dut->empty_o, "drain: pushed %u, popped %u", wseq, rseq);
-  if (tfp) tfp->close();
+  tfp.close();
   dut->final();
   printf("tb_cdc: PASS %u values, %d phases, %llu write and %llu read cycles\n", wseq, phase,
          (unsigned long long)wedges, (unsigned long long)redges);

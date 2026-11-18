@@ -3,7 +3,8 @@
 
 #include <svdpi.h>
 #include <verilated.h>
-#include <verilated_fst_c.h>
+
+#include "tb_trace.h"
 
 #include <chrono>
 #include <stdexcept>
@@ -30,7 +31,7 @@ constexpr uint32_t kSpmBytes = 64 * 1024;
 struct SimHost::Impl {
   std::unique_ptr<VerilatedContext> ctx;
   std::unique_ptr<Vtb_soc_top> dut;
-  std::unique_ptr<VerilatedFstC> tfp;
+  TbTrace tfp;
   std::unique_ptr<AxiMaster<Vtb_soc_top>> bfm;
   int ah = 4, fh = 5;
   uint64_t now = 0, anext = 1, fnext = 3, fcycles = 0, acycles = 0, max_cycles = 0;
@@ -44,7 +45,7 @@ struct SimHost::Impl {
 
   void eval() {
     dut->eval();
-    if (tfp) tfp->dump(now);
+    tfp.dump(now);
   }
   // Advance to the next clock edge(s); the AXI model acts on AXI rising edges
   void step() {
@@ -90,12 +91,7 @@ SimHost::SimHost(int argc, char** argv, const TbArgs& args) : impl_(std::make_un
   s.ctx->randSeed((int)(args.seed & 0x7fffffff));
   s.ctx->commandArgs(argc, argv);
   s.dut = std::make_unique<Vtb_soc_top>(s.ctx.get());
-  if (!args.trace.empty()) {
-    s.ctx->traceEverOn(true);
-    s.tfp = std::make_unique<VerilatedFstC>();
-    s.dut->trace(s.tfp.get(), 99);
-    s.tfp->open(args.trace.c_str());
-  }
+  s.tfp.open(s.ctx.get(), s.dut.get(), args.trace);
   s.bfm = std::make_unique<AxiMaster<Vtb_soc_top>>(s.dut.get(), args.seed ^ 0xa11);
   // Both domains in reset; flops start random (--x-initial unique), so
   // assertions stay off until the asynchronous resets have been applied.
@@ -192,7 +188,7 @@ bool SimHost::failed() const { return impl_->any_failed || impl_->ctx->gotError(
 
 void SimHost::finish() {
   Impl& s = *impl_;
-  if (s.tfp) s.tfp->close();
+  s.tfp.close();
   s.dut->final();
   double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - s.t_start).count();
   printf("simulation: %llu fabric cycles in %.1f s (%.2f kHz, %u Verilator threads, lockstep %s)\n",

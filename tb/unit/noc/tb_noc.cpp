@@ -18,7 +18,6 @@
 // --soak=N sets the soak length; --expect-deadlock inverts the result for the
 // BUBBLE=0 build.
 #include <verilated.h>
-#include <verilated_fst_c.h>
 
 #include <algorithm>
 #include <array>
@@ -32,6 +31,7 @@
 #include "Vtb_noc_top.h"
 #include "noc_tlm.h"
 #include "tb_args.h"
+#include "tb_trace.h"
 
 using namespace torus;
 
@@ -121,17 +121,12 @@ int main(int argc, char** argv) {
   auto ctx = std::make_unique<VerilatedContext>();
   ctx->randSeed((int)(args.seed & 0x7fffffff));
   auto dut = std::make_unique<Vtb_noc_top>(ctx.get());
-  std::unique_ptr<VerilatedFstC> tfp;
-  if (!args.trace.empty()) {
-    ctx->traceEverOn(true);
-    tfp = std::make_unique<VerilatedFstC>();
-    dut->trace(tfp.get(), 99);
-    tfp->open(args.trace.c_str());
-  }
+  TbTrace tfp;
+  tfp.open(ctx.get(), dut.get(), args.trace);
   auto half = [&](int clk) {
     dut->clk_i = clk;
     dut->eval();
-    if (tfp) tfp->dump(ctx->time());
+    tfp.dump(ctx->time());
     ctx->timeInc(1);
   };
   ctx->assertOn(false);
@@ -461,7 +456,7 @@ int main(int argc, char** argv) {
       TB_CHECK(rtl_links[k][p] == tlm[k / kN].link_count(k % kN, p),
                "link plane %d node %d port %s: rtl %llu flits, model %llu", dir_of(k / kN), k % kN, kPortName[p],
                (unsigned long long)rtl_links[k][p], (unsigned long long)tlm[k / kN].link_count(k % kN, p));
-  if (tfp) tfp->close();
+  tfp.close();
   printf("tb_noc: PASS %dx%d planes=%d%s dir=%d slice=%d delivered=%llu (NoC%d %llu, NoC1 %llu) cycles=%llu "
          "bubble_holds=%llu\n",
          kGX, kGY, kP, kIoRow ? " io_row" : "", kDir, kSlice, (unsigned long long)delivered, kP == 2 ? 0 : kDir,

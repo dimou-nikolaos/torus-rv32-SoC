@@ -8,7 +8,6 @@
 // one flit per cycle when DEPTH >= the credit round trip, and exactly
 // DEPTH / RTT of the cycles otherwise.
 #include <verilated.h>
-#include <verilated_fst_c.h>
 
 #include <deque>
 #include <memory>
@@ -16,6 +15,7 @@
 
 #include "Vtb_link_top.h"
 #include "tb_args.h"
+#include "tb_trace.h"
 
 #ifndef LINK_SLICE
 #error "LINK_SLICE must be defined"
@@ -90,17 +90,12 @@ int main(int argc, char** argv) {
   auto ctx = std::make_unique<VerilatedContext>();
   ctx->randSeed((int)(args.seed & 0x7fffffff));
   auto dut = std::make_unique<Vtb_link_top>(ctx.get());
-  std::unique_ptr<VerilatedFstC> tfp;
-  if (!args.trace.empty()) {
-    ctx->traceEverOn(true);
-    tfp = std::make_unique<VerilatedFstC>();
-    dut->trace(tfp.get(), 99);
-    tfp->open(args.trace.c_str());
-  }
+  TbTrace tfp;
+  tfp.open(ctx.get(), dut.get(), args.trace);
   auto half = [&](int clk) {
     dut->clk_i = clk;
     dut->eval();
-    if (tfp) tfp->dump(ctx->time());
+    tfp.dump(ctx->time());
     ctx->timeInc(1);
   };
 
@@ -197,7 +192,7 @@ int main(int argc, char** argv) {
   double want = depth >= rtt ? 1.0 : (double)depth / rtt;
   TB_CHECK(rate > want - 0.002 && rate < want + 0.002, "full-rate window: %.4f flits/cycle, expected %.4f",
            rate, want);
-  if (tfp) tfp->close();
+  tfp.close();
   printf("tb_link: PASS slice=%d depth=%d rtt=%d sent=%llu full-rate=%.3f flits/cycle\n", slice,
          depth, rtt, (unsigned long long)sent, rate);
   return 0;

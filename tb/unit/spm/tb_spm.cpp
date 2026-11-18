@@ -6,7 +6,6 @@
 // no request may wait beyond the starvation bound, and every request pattern
 // (all 128 subsets of ports) must be seen on every bank.
 #include <verilated.h>
-#include <verilated_fst_c.h>
 
 #include <memory>
 #include <random>
@@ -15,6 +14,7 @@
 #include "Vtb_spm_top.h"
 #include "spm_model.h"
 #include "tb_args.h"
+#include "tb_trace.h"
 
 using namespace torus;
 
@@ -51,13 +51,8 @@ int main(int argc, char** argv) {
   ctx->commandArgs(argc, argv);
   ctx->randSeed((int)(args.seed & 0x7fffffff));
   auto dut = std::make_unique<Vtb_spm_top>(ctx.get());
-  std::unique_ptr<VerilatedFstC> tfp;
-  if (!args.trace.empty()) {
-    ctx->traceEverOn(true);
-    tfp = std::make_unique<VerilatedFstC>();
-    dut->trace(tfp.get(), 99);
-    tfp->open(args.trace.c_str());
-  }
+  TbTrace tfp;
+  tfp.open(ctx.get(), dut.get(), args.trace);
 
   std::vector<ArbiterModel> arb(kSpmBanks, ArbiterModel(kStarveLimit));
   SpmMemory mem;
@@ -75,11 +70,20 @@ int main(int argc, char** argv) {
   int max_wait = 0;
   uint64_t t = 0;
 
+  // Half a clock period in time steps; timed events in between (the SRAM macro
+  // model's output delays in tb_spm_sky130) run at their own time.
+  const uint64_t kHalf = 10;
   auto tick = [&](int clk) {
     dut->clk_i = clk;
     dut->eval();
-    if (tfp) tfp->dump(ctx->time());
-    ctx->timeInc(1);
+    tfp.dump(ctx->time());
+    const uint64_t end = ctx->time() + kHalf;
+    while (dut->eventsPending() && dut->nextTimeSlot() < end) {
+      ctx->time(dut->nextTimeSlot());
+      dut->eval();
+      tfp.dump(ctx->time());
+    }
+    ctx->time(end);
   };
 
   // Reset
@@ -144,22 +148,6 @@ int main(int argc, char** argv) {
     mode = phase == 0 ? Mode::Uniform : phase == 1 ? Mode::HotBank : Mode::Stream;
     if (t % 5000 == 0) hot_bank = (int)(rng() % kSpmBanks);
 
-    // Check responses from last cycle's grants (registered outputs)
-    for (int p = 0; p < kSpmPorts; p++) {
-      bool rv = dut->rvalid_o >> p & 1;
-      TB_CHECK(rv == exp_valid[p], "t=%llu port %d rvalid=%d expected %d",
-               (unsigned long long)t, p, rv, exp_valid[p]);
-      if (rv && exp_is_read[p]) {
-        const uint32_t* w = &dut->rdata_o[p * 4];
-        for (int b = 0; b < 16; b++) {
-          uint8_t got = (uint8_t)(w[b / 4] >> (8 * (b % 4)));
-          TB_CHECK(got == exp_data[p][b], "t=%llu port %d read byte %d: got %02x expected %02x",
-                   (unsigned long long)t, p, b, got, exp_data[p][b]);
-        }
-        reads_checked++;
-      }
-    }
-
     // Drive requests
     uint32_t req = 0, we = 0, lock = 0, add = 0;
     for (int p = 0; p < kSpmPorts; p++) {
@@ -177,6 +165,23 @@ int main(int argc, char** argv) {
     dut->lock_i = lock;
     dut->add_i = add;
     tick(0);
+
+    // Check responses from last cycle's grants before the clock edge: SRAM macros
+    // drive read data only after the falling edge (tb_spm_sky130)
+    for (int p = 0; p < kSpmPorts; p++) {
+      bool rv = dut->rvalid_o >> p & 1;
+      TB_CHECK(rv == exp_valid[p], "t=%llu port %d rvalid=%d expected %d",
+               (unsigned long long)t, p, rv, exp_valid[p]);
+      if (rv && exp_is_read[p]) {
+        const uint32_t* w = &dut->rdata_o[p * 4];
+        for (int b = 0; b < 16; b++) {
+          uint8_t got = (uint8_t)(w[b / 4] >> (8 * (b % 4)));
+          TB_CHECK(got == exp_data[p][b], "t=%llu port %d read byte %d: got %02x expected %02x",
+                   (unsigned long long)t, p, b, got, exp_data[p][b]);
+        }
+        reads_checked++;
+      }
+    }
 
     // Model grants per bank
     uint32_t exp_gnt = 0, exp_prom = 0;
@@ -248,7 +253,7 @@ int main(int argc, char** argv) {
     TB_CHECK(seen_masks[b].size() == 128, "bank %d saw only %zu of 128 request patterns", b,
              seen_masks[b].size());
 
-  if (tfp) tfp->close();
+  tfp.close();
   dut->final();
   printf("tb_spm: PASS cycles=%llu grants=%llu adds=%llu reads_checked=%llu conflicts=%llu "
          "promotions=%llu max_wait=%d bound=%d\n",

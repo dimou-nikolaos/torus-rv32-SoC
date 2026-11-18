@@ -5,6 +5,14 @@
 # minutes at -O3); the per-cycle code keeps the build type's optimization.
 find_package(verilator REQUIRED HINTS $ENV{VERILATOR_ROOT})
 
+# FST waveforms (--trace=FILE) cost build and run time in every model, so they
+# are compiled in only on request: cmake -DTORUS_TRACE=ON (tb/common/tb_trace.h).
+option(TORUS_TRACE "Compile FST waveform tracing into the testbenches" OFF)
+set(TORUS_TRACE_OPT "")
+if(TORUS_TRACE)
+  set(TORUS_TRACE_OPT TRACE_FST)
+endif()
+
 # Expand a .f file list (paths relative to the repo root, nested -f allowed)
 # into a flat list of absolute paths and +incdir/+define options.
 function(torus_expand_flist flist out_var)
@@ -54,7 +62,7 @@ function(torus_verilated_tb name)
     SOURCES ${srcs}
     TOP_MODULE ${TB_TOP}
     PREFIX V${TB_TOP}
-    TRACE_FST
+    ${TORUS_TRACE_OPT}
     OPT_SLOW -O0
     VERILATOR_ARGS -Wall -Werror-USERFATAL -Werror-USERERROR --assert
                    --x-assign unique --x-initial unique --x-initial-edge -O3
@@ -91,7 +99,7 @@ function(torus_verilated_lib name)
     TOP_MODULE ${TB_TOP}
     PREFIX V${TB_TOP}
     THREADS ${TB_THREADS}
-    TRACE_FST
+    ${TORUS_TRACE_OPT}
     OPT_SLOW -O0
     VERILATOR_ARGS -Wall -Werror-USERFATAL -Werror-USERERROR --assert
                    --x-assign unique --x-initial unique --x-initial-edge -O3

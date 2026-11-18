@@ -76,9 +76,14 @@ tools/dev.sh ninja -C build
 # Run a program on every tile of a 1x1, 2x2 or 4x4 grid (plus the I/O row),
 # loaded through the I/O tile, Spike in lockstep on every core
 tools/dev.sh build/tb/soc/tb_soc_1x1 build/sw/hello.elf
-tools/dev.sh build/tb/soc/tb_soc_2x2 build/sw/nocops.elf --trace=build/nocops.fst
 tools/dev.sh build/tb/soc/tb_soc_1x1 build/sw/isa/rv32ui-add.elf --rvfi-trace
 tools/dev.sh build/tb/soc/tb_soc_4x4 build/sw/hello.elf --axi-half=10   # slower AXI clock
+
+# Waveforms: compiled in only on request (a separate build directory keeps the
+# fast models), then --trace=FILE writes an FST
+tools/dev.sh cmake -S . -B build-trace -G Ninja -DCMAKE_BUILD_TYPE=Release -DTORUS_TRACE=ON
+tools/dev.sh ninja -C build-trace tb_soc_2x2
+tools/dev.sh build-trace/tb/soc/tb_soc_2x2 build-trace/sw/nocops.elf --trace=build/nocops.fst
 
 # memcpy from C++ (libtorus), checked against the performance model
 tools/dev.sh model/perf_model.py run-memcpy --host build/tb/soc/host_memcpy_4x4 \

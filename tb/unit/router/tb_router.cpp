@@ -12,7 +12,6 @@
 //     entering flits never are, and the hold is counted;
 //   - zero bubbles in every phase.
 #include <verilated.h>
-#include <verilated_fst_c.h>
 
 #include <map>
 #include <memory>
@@ -22,6 +21,7 @@
 #include "Vtb_router_top.h"
 #include "router_model.h"
 #include "tb_args.h"
+#include "tb_trace.h"
 
 using namespace torus;
 
@@ -116,17 +116,12 @@ int main(int argc, char** argv) {
   auto ctx = std::make_unique<VerilatedContext>();
   ctx->randSeed((int)(args.seed & 0x7fffffff));
   auto dut = std::make_unique<Vtb_router_top>(ctx.get());
-  std::unique_ptr<VerilatedFstC> tfp;
-  if (!args.trace.empty()) {
-    ctx->traceEverOn(true);
-    tfp = std::make_unique<VerilatedFstC>();
-    dut->trace(tfp.get(), 99);
-    tfp->open(args.trace.c_str());
-  }
+  TbTrace tfp;
+  tfp.open(ctx.get(), dut.get(), args.trace);
   auto half = [&](int clk) {
     dut->clk_i = clk;
     dut->eval();
-    if (tfp) tfp->dump(ctx->time());
+    tfp.dump(ctx->time());
     ctx->timeInc(1);
   };
 
@@ -397,7 +392,7 @@ int main(int argc, char** argv) {
   }
 
   TB_CHECK(outstanding.empty(), "%zu flits never delivered", outstanding.size());
-  if (tfp) tfp->close();
+  tfp.close();
   printf("tb_router: PASS dir=%d slice=%d depth=%d delivered=%llu hop=2 bubble_holds=%llu "
          "ring_sends_at_one_credit=%llu\n",
          kDir, kSlice, kDepth, (unsigned long long)delivered, (unsigned long long)bubble_holds,

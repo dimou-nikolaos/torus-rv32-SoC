@@ -19,7 +19,6 @@
 // Throughput: a long write burst injects one flit per fabric cycle (or at the
 // AXI beat rate if that is slower), and streamed reads keep up the same.
 #include <verilated.h>
-#include <verilated_fst_c.h>
 
 #include <array>
 #include <deque>
@@ -34,6 +33,7 @@
 #include "noc_tlm.h"
 #include "router_model.h"
 #include "tb_args.h"
+#include "tb_trace.h"
 
 using namespace torus;
 
@@ -106,13 +106,8 @@ int main(int argc, char** argv) {
   ctx->randReset(2);
   ctx->randSeed((int)(args.seed & 0x7fffffff));
   auto dut = std::make_unique<Vtb_io_top>(ctx.get());
-  std::unique_ptr<VerilatedFstC> tfp;
-  if (!args.trace.empty()) {
-    ctx->traceEverOn(true);
-    tfp = std::make_unique<VerilatedFstC>();
-    dut->trace(tfp.get(), 99);
-    tfp->open(args.trace.c_str());
-  }
+  TbTrace tfp;
+  tfp.open(ctx.get(), dut.get(), args.trace);
 
   // Clocks: AXI and fabric half periods, per seed
   const std::pair<int, int> ratios[] = {{5, 5}, {3, 5}, {7, 5}, {4, 9}, {11, 5}, {5, 6}};
@@ -280,7 +275,7 @@ int main(int argc, char** argv) {
   // ------------------------------------------------------------ clocking
   auto eval = [&]() {
     dut->eval();
-    if (tfp) tfp->dump(now);
+    tfp.dump(now);
   };
   auto step = [&]() -> int {
     uint64_t t = std::min(anext, fnext);
@@ -567,7 +562,7 @@ int main(int argc, char** argv) {
     if (rd32(c.off, &v)) return 1;
     TB_CHECK(v == (uint32_t)c.want, "%s = %u, expected %llu", c.name, v, (unsigned long long)c.want);
   }
-  if (tfp) tfp->close();
+  tfp.close();
   dut->final();
   TB_CHECK(inj_per_plane[0] && inj_per_plane[1] && ej_flits[0] && ej_flits[1], "a plane carried no traffic");
   printf("tb_io: PASS %llu operations, %llu flits (NoC0 %llu, NoC1 %llu; %llu writes, %llu READ_REQs, %llu replies), "
