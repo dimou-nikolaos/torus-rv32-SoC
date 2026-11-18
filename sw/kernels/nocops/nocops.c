@@ -1,8 +1,9 @@
 // NoC operations on any grid (SPEC.md, NoC packet format; Ordering and
 // completion): every tile reads every tile's scratchpad and tile control with
 // dma_read, all tiles increment one semaphore with ATOMIC_INC (one of them
-// with the doorbell), noc_fence orders a write before a third tile looks, and
-// the new command checks set the error bit.
+// with the doorbell), noc_fence orders a write before a third tile looks, the
+// command checks set the error bit, and neighbor() wraps over the compute grid
+// (never the I/O row) while every tile swaps a word with its four neighbors.
 #include <stdio.h>
 #include <string.h>
 
@@ -29,6 +30,10 @@ static volatile uint32_t ready __attribute__((section(".data"))) = 0;
 static volatile uint32_t total __attribute__((section(".data"))) = 0;
 static volatile uint32_t fenced __attribute__((section(".data"))) = 0;
 static volatile uint32_t finished __attribute__((section(".data"))) = 0;
+static volatile uint32_t swapped __attribute__((section(".data"))) = 0;
+// One slot per direction a neighbor writes from (E, W, S, N)
+static uint32_t nbslot[4][4] __attribute__((aligned(16), section(".data"))) = {{0}};
+static const int nbdir[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
 
 static uint32_t pat(xy_t t, uint32_t i) { return (uint32_t)t.x << 28 ^ (uint32_t)t.y << 24 ^ i * 0x9e3779b9u; }
 
@@ -124,6 +129,30 @@ int kernel_main(const args_t *args) {
   }
   dma_read(me, (uint32_t)pattern, (uint32_t)inbuf, 0);   // zero length: done at once, no error
   CHECK(!(niu_status(0) & (NIU_STATUS_ERROR | NIU_STATUS_BUSY)));
+
+  // 7. neighbor(): the compute torus only, any offset, wrapping both ways
+  int nx = (int)grid_nx(), ny = (int)grid_ny();
+  for (int dy = -ny - 1; dy <= ny + 1; dy++)
+    for (int dx = -nx - 1; dx <= nx + 1; dx++) {
+      xy_t nb = neighbor(dx, dy);
+      CHECK(nb.x == (unsigned)(((me.x + dx) % nx + nx) % nx) && nb.y == (unsigned)(((me.y + dy) % ny + ny) % ny));
+      CHECK(nb.y < ny);   // never the I/O row
+    }
+  // Swap with the four neighbors (on 4x4: both planes, Y rings across the
+  // I/O row): data first, then the semaphore on the same path
+  uint32_t word[4] __attribute__((aligned(16)));
+  for (int d = 0; d < 4; d++) {
+    word[0] = 0xa0000000u | idx << 8 | (uint32_t)d;
+    word[1] = word[2] = word[3] = ~word[0];
+    dma_write(0, (uint32_t)word, neighbor(nbdir[d][0], nbdir[d][1]), (uint32_t)nbslot[d], 16);
+    dma_wait(0);
+    sem_inc(neighbor(nbdir[d][0], nbdir[d][1]), (uint32_t)&swapped, 1);
+  }
+  sem_wait(&swapped, 4);
+  for (int d = 0; d < 4; d++) {
+    unsigned from = tile_index(neighbor(-nbdir[d][0], -nbdir[d][1]));
+    CHECK(nbslot[d][0] == (0xa0000000u | from << 8 | (uint32_t)d) && nbslot[d][3] == ~nbslot[d][0]);
+  }
 
   // Stay until every tile is done reading from us
   for (unsigned t = 0; t < n; t++) sem_inc(tile_at(t), (uint32_t)&finished, 1);

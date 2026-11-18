@@ -552,7 +552,7 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 - [x] NoC1 plane (west and north) → both planes pass the traffic tests, I/O row included in the Y rings (bare grid with both planes and the I/O row's stops: delivery on the expected plane, per-pair order, exact per-link counts, every link of each ring-direction permutation at 100%, 2M-cycle soak on 4x5; the SoC wires NoC1 through tiles, stops and the I/O tile)
 - [x] Automatic plane selection in the DMA (fixed per source and destination) → measured hop counts match the prediction, per (src, dst) ordering holds (NIU, I/O bridge and reply engine use `noc_pkg::select_plane`; the NIU test checks every flit's plane, forced planes included; memcpy per-link counts exact with shifts that run on NoC0, NoC1 and both)
 - [x] NoC model updated for torus and two planes → RTL matches (noc_tlm.h `select_plane`, model/perf_model.py)
-- [ ] `neighbor()` in `tile.h` → wraparound over the compute grid passes, I/O row skipped
+- [x] `neighbor()` in `tile.h` → wraparound over the compute grid passes, I/O row skipped (nocops on 1x1, 2x2, 4x4: every offset up to one grid beyond each way, plus a data-then-semaphore swap with all four neighbors, which on 4x4 runs on both planes and across the I/O row)
 - [ ] Cannon GEMM, scalar, 4x4 → bit-exact
 - [ ] Cannon counters vs the performance model → within 15%
 - [ ] Same kernels on one plane and on two planes → comparison table recorded
