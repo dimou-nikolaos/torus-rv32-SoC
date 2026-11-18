@@ -20,7 +20,7 @@ int main(int argc, char** argv) {
   ctx->randReset(2);
   ctx->randSeed((int)(args.seed & 0x7fffffff));
   auto dut = std::make_unique<Vtb_cdc_top>(ctx.get());
-  TbTrace tfp;
+  torus::TbTrace tfp;
   tfp.open(ctx.get(), dut.get(), args.trace);
 
   // Clocks: half periods in time units, next edge times

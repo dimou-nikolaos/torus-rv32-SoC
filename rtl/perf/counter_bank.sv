@@ -12,8 +12,13 @@
 //   0xFF4         PERF_CMD (write-only, reads 0): bit 0 SNAPSHOT copies every
 //                 counter into the snapshot view in the same cycle, bit 1 CLEAR
 //                 restarts the live counters from 0; both in one write capture
-//                 the totals including this cycle's events, then restart
+//                 the totals, then restart
 //   0xFF8         number of selectable events (read-only)
+//
+// Events and enable_i are registered before counting (the core's events come
+// late in the cycle, behind the scratchpad grant): a counter counts an event
+// one cycle after it happens, and a snapshot or clear sees the events up to the
+// previous cycle.
 //
 // Changing a select does not clear its counter. A select naming no event counts
 // nothing. Writes elsewhere, and reads outside the map, return an error.
@@ -101,14 +106,25 @@ module counter_bank
       end
   end
 
-  // The event each counter counts this cycle
+  // The event each counter counts: registered events of the previous cycle
+  logic [NEV-1:0] events_q;
+  logic           enable_q;
   logic [N-1:0]   hit;
   logic [255:0]   ev_all;   // every select value names a bit; unused ones are 0
-  assign ev_all = 256'(events_i);
+  assign ev_all = 256'(events_q);
   always_comb begin
-    for (int i = 0; i < NFIX; i++) hit[i] = events_i[i];
+    for (int i = 0; i < NFIX; i++) hit[i] = events_q[i];
     for (int k = 0; k < NPROG; k++) hit[NFIX + k] = ev_all[sel_q[k]];
   end
+
+  always_ff @(posedge clk_i or negedge rst_ni)
+    if (!rst_ni) begin
+      events_q <= '0;
+      enable_q <= 1'b0;
+    end else begin
+      events_q <= events_i;
+      enable_q <= enable_i;
+    end
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -119,7 +135,7 @@ module counter_bank
     end else begin
       for (int i = 0; i < N; i++) begin
         logic [CW-1:0] next;
-        next = cnt_q[i] + CW'(enable_i && hit[i]);
+        next = cnt_q[i] + CW'(enable_q && hit[i]);
         if (do_snap)  snap_q[i] <= next;
         cnt_q[i] <= do_clear ? '0 : next;
       end

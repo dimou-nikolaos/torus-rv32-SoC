@@ -5,7 +5,11 @@
 // Atomic add: a locked read, then (granted through the lock) a write with `add`,
 // which stores the bank's read register + wdata in the 32-bit lane the byte
 // enables select. The adder sits here, next to the bank output, so the
-// requester never feeds read data back into its own request.
+// requester never feeds read data back into its own request. The add is always
+// the cycle right after its locked read, by the same port on the same lane, so
+// the adder takes port and lane registered from the read and only the final
+// write-data select waits for this cycle's grant (the grant path is the tile's
+// critical path, M5).
 module spm_banks
   import tile_pkg::*;
 #(
@@ -52,12 +56,14 @@ module spm_banks
       .promoted_o (bank_prom[b])
     );
 
-    logic        add;
-    logic [1:0]  lane;
-    logic [31:0] sum;
+    localparam int unsigned PW = $clog2(SPM_PORTS);
+    logic          add;
+    logic [1:0]    lane, lane_q;
+    logic [PW-1:0] port, port_q;
+    logic [31:0]   sum;
     always_comb begin
       en = |bank_gnt[b];
-      we = 1'b0; row = '0; be = '0; wdata = '0; add = 1'b0;
+      we = 1'b0; row = '0; be = '0; wdata = '0; add = 1'b0; port = '0;
       for (int p = 0; p < SPM_PORTS; p++) begin
         if (bank_gnt[b][p]) begin
           we    = req_i[p].we;
@@ -65,13 +71,32 @@ module spm_banks
           row   = spm_row_of(req_i[p].addr);
           be    = req_i[p].be;
           wdata = req_i[p].wdata;
+          port  = PW'(p);
         end
       end
       lane = '0;
       for (int l = 0; l < 4; l++) if (be[4*l]) lane = 2'(l);
-      sum = bank_rdata[b][32*lane +: 32] + wdata[32*lane +: 32];
+      // The previous cycle's (locked read's) port and lane
+      sum = bank_rdata[b][32*lane_q +: 32] + req_i[port_q].wdata[32*lane_q +: 32];
       if (add) wdata = {4{sum}};
     end
+
+    always_ff @(posedge clk_i or negedge rst_ni)
+      if (!rst_ni) begin
+        port_q <= '0;
+        lane_q <= '0;
+      end else if (en) begin
+        port_q <= port;
+        lane_q <= lane;
+      end
+
+`ifndef SYNTHESIS
+    always_ff @(posedge clk_i or negedge rst_ni)
+      if (rst_ni && en && add)
+        assert (port == port_q && lane == lane_q)
+          else $error("spm_banks: bank %0d add by port %0d lane %0d, its read was port %0d lane %0d",
+                      b, port, lane, port_q, lane_q);
+`endif
 
     spm_bank #(.ROWS(SPM_ROWS)) u_bank (
       .clk_i, .en_i(en), .we_i(we), .row_i(row), .be_i(be), .wdata_i(wdata),

@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
   auto ctx = std::make_unique<VerilatedContext>();
   ctx->randSeed((int)(args.seed & 0x7fffffff));
   auto dut = std::make_unique<Vtb_link_top>(ctx.get());
-  TbTrace tfp;
+  torus::TbTrace tfp;
   tfp.open(ctx.get(), dut.get(), args.trace);
   auto half = [&](int clk) {
     dut->clk_i = clk;

@@ -7,7 +7,8 @@
 # effort mode); every other module boundary is kept.
 # Environment: PNR_LIBS (standard cells), PNR_MACRO_LIBS, PNR_FILES,
 # PNR_INCDIRS, PNR_DEFINES, PNR_TOP, PNR_PARAMS (name value ...), PNR_FLAT,
-# PNR_OUT.
+# PNR_SLANG_ARGS (extra frontend options), PNR_BLACKBOX (hard macros declared in the sources: module and parameters, as
+# PNR_FLAT; ORFS later reads their liberty view over the black box), PNR_OUT.
 yosys -import
 
 set libs [concat $::env(PNR_LIBS) $::env(PNR_MACRO_LIBS)]
@@ -26,13 +27,17 @@ foreach lib $::env(PNR_MACRO_LIBS) {
   close $fh
 }
 
-set args [concat $common [list --keep-hierarchy --top $::env(PNR_TOP)]]
+set args [concat $common [list --keep-hierarchy --top $::env(PNR_TOP)] $::env(PNR_SLANG_ARGS)]
 dict for {k v} $::env(PNR_PARAMS) { lappend args -G "$k=$v" }
-foreach entry [split $::env(PNR_FLAT) ";"] {
+foreach entry [split "$::env(PNR_FLAT) ; $::env(PNR_BLACKBOX)" ";"] {
   if {[lindex $entry 0] ne ""} { lappend args --blackboxed-module [lindex $entry 0] }
 }
 read_slang {*}$args {*}$::env(PNR_FILES)
 setattr -unset init
+foreach entry [split $::env(PNR_BLACKBOX) ";"] {
+  set params [lassign $entry m]
+  foreach p $params { setparam -unset $p t:$m }
+}
 
 # PNR_FLAT: module name followed by the parameters its instances carry (their
 # defaults: the flat module is elaborated with those), "core_wrap A B ; ..."

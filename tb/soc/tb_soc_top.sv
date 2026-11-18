@@ -4,7 +4,8 @@
 module tb_soc_top #(
   parameter int unsigned NX         = 1,
   parameter int unsigned NY         = 1,
-  parameter int unsigned LINK_SLICE = 0
+  parameter int unsigned LINK_SLICE = 0,
+  parameter int unsigned FT_ORDER   = 0     // links through tile feedthroughs (soc_top)
 ) (
   input  logic          clk_i,
   input  logic          rst_ni,
@@ -40,7 +41,7 @@ module tb_soc_top #(
   output logic          s_axi_rvalid_o,
   input  logic          s_axi_rready_i
 );
-  soc_top #(.NX(NX), .NY(NY), .LINK_SLICE(LINK_SLICE), .IDW(4)) u_soc (.*);
+  soc_top #(.NX(NX), .NY(NY), .LINK_SLICE(LINK_SLICE), .FT_ORDER(FT_ORDER), .IDW(4)) u_soc (.*);
 
   import "DPI-C" function void torus_rvfi_retire(
     input int     hart,

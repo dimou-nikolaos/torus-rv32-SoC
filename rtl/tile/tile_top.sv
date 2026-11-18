@@ -31,8 +31,27 @@ module tile_top
   input  link_t       y_in_i         [2],
   output logic        y_in_credit_o  [2],
   output link_t       y_out_o        [2],
-  input  logic        y_out_credit_i [2]
+  input  logic        y_out_credit_i [2],
+
+  // Feedthroughs (wires, no logic): one link per lane crosses the tile, with
+  // its credit going back. X lane 0 runs west to east, lane 1 east to west; Y
+  // lane 0 north to south, lane 1 south to north (sides as placed in R0). The
+  // grid uses them for links that pass over a tile in a placed order
+  // (soc_top FT_ORDER); otherwise they are unused.
+  input  link_t       xft_i          [2],
+  output link_t       xft_o          [2],
+  input  logic        xft_credit_i   [2],
+  output logic        xft_credit_o   [2],
+  input  link_t       yft_i          [2],
+  output link_t       yft_o          [2],
+  input  logic        yft_credit_i   [2],
+  output logic        yft_credit_o   [2]
 );
+  assign xft_o        = xft_i;
+  assign xft_credit_o = xft_credit_i;
+  assign yft_o        = yft_i;
+  assign yft_credit_o = yft_credit_i;
+
   // ------------------------------------------------------------------ core
   logic        run;
   logic        instr_req, instr_gnt, instr_rvalid, instr_err;

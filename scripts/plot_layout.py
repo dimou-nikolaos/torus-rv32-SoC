@@ -19,6 +19,7 @@ import sys
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.lines  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.collections import PatchCollection  # noqa: E402
 from matplotlib.patches import Patch, Rectangle  # noqa: E402
@@ -45,6 +46,90 @@ OTHER = "other (buffers, clock tree, ties)"
 SKIP_MASTERS = re.compile(r"(tapvpwrvgnd|fill|decap|PHY_|TAP_)", re.I)
 
 
+# Valid bit of each output link of a tile (the MSB of a 207-bit link_t; plane 0
+# is the upper half of the two-plane port): one line per link in the overlay
+LINK_PINS = {"x_out_o[413]": ("NoC0 east", "#1f77b4"), "y_out_o[413]": ("NoC0 south", "#2ca02c"),
+             "x_out_o[206]": ("NoC1 west", "#d62728"), "y_out_o[206]": ("NoC1 north", "#9467bd")}
+
+
+def lef_pins(paths, macro):
+    """Pin centers of one macro, in its own (R0) coordinates."""
+    pins = {}
+    for p in paths:
+        text = open(p, errors="replace").read()
+        m = re.search(rf"MACRO {re.escape(macro)}\b(.*?)END {re.escape(macro)}\b", text, re.S)
+        if not m:
+            continue
+        for pm in re.finditer(r"PIN (\S+)\n(.*?)END \1", m.group(1), re.S):
+            r = re.search(r"RECT\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)", pm.group(2))
+            if r:
+                x0, y0, x1, y1 = (float(v) for v in r.groups())
+                pins[pm.group(1)] = ((x0 + x1) / 2, (y0 + y1) / 2)
+    return pins
+
+
+def place_point(px, py, w, h, x, y, orient):
+    """A point (px, py) of a w x h macro, placed at (x, y) with a DEF orientation."""
+    o = {"N": "R0", "S": "R180", "FN": "MY", "FS": "MX"}.get(orient, orient)
+    if o in ("MY", "R180"):
+        px = w - px
+    if o in ("MX", "R180"):
+        py = h - py
+    return x + px, y + py
+
+
+def link_lines(def_text, comps, sizes, pins, macro):
+    """(x0, y0, x1, y1, label, color) segments of each tile output link, from
+    its pin through buffers and repeaters (followed A -> X) to the sinks."""
+    where = {name: (master, x, y, o) for name, master, x, y, o in comps}
+    sec = re.search(r"^NETS \d+ ;(.*?)^END NETS", def_text, re.S | re.M)
+    nets, net_of = [], {}
+    for net in (sec.group(1) if sec else "").split(";"):
+        conns = [(i.replace("\\", ""), pn.replace("\\", ""))
+                 for i, pn in re.findall(r"\(\s*(\S+)\s+(\S+)\s*\)", net)]
+        if not conns:
+            continue
+        for c in conns:
+            net_of[c] = len(nets)
+        nets.append(conns)
+    w, h = sizes[macro]
+
+    def point(inst, pin):
+        m, x, y, o = where[inst]
+        if m == macro and pin in pins:
+            return place_point(*pins[pin], w, h, x, y, o)
+        cw, ch = sizes.get(m, (0, 0))
+        return x + cw / 2, y + ch / 2
+
+    out = []
+    for (inst, pin), n in net_of.items():
+        if pin not in LINK_PINS or inst not in where or where[inst][0] != macro:
+            continue
+        label, color = LINK_PINS[pin]
+        todo, seen = [(n, point(inst, pin))], set()
+        while todo:
+            n, p0 = todo.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            for i, pn in nets[n]:
+                if (i, pn) == (inst, pin) or i == "PIN" or i not in where or pn in ("X", "Y") and n == net_of.get((i, pn)):
+                    continue
+                p1 = point(i, pn)
+                out.append((*p0, *p1, label, color))
+                master = where[i][0]
+                if re.search(r"__(buf|clkbuf|dlygate|dlymetal)", master) and (i, "X") in net_of:
+                    todo.append((net_of[(i, "X")], p1))
+                ft = re.match(r"([xy]ft)_i(\[\d+\])$", pn)
+                if master == macro and ft and (i, f"{ft.group(1)}_o{ft.group(2)}") in net_of:
+                    # through the tile's feedthrough: continue from the other edge
+                    q = (i, f"{ft.group(1)}_o{ft.group(2)}")
+                    p2 = point(*q)
+                    out.append((*p1, *p2, label, color))
+                    todo.append((net_of[q], p2))
+    return out
+
+
 def lef_sizes(paths):
     sizes = {}
     for p in paths:
@@ -65,6 +150,7 @@ def lef_sizes(paths):
 def read_def(path):
     dbu, die, comps = 1000.0, None, []
     text = open(path, errors="replace").read()
+    read_def.text = text
     m = re.search(r"UNITS DISTANCE MICRONS (\d+)", text)
     if m:
         dbu = float(m.group(1))
@@ -94,6 +180,17 @@ def classify(name, master, rules):
     return OTHER
 
 
+def densest(rects, die, n=24):
+    x0, y0, x1, y1 = die if die else (0, 0, 1, 1)
+    bw, bh = (x1 - x0) / n, (y1 - y0) / n
+    count = {}
+    for r in rects:
+        k = (int((r.get_x() - x0) / bw), int((r.get_y() - y0) / bh))
+        count[k] = count.get(k, 0) + 1
+    (i, j), _ = max(count.items(), key=lambda kv: kv[1])
+    return x0 + (i + 0.5) * bw, y0 + (j + 0.5) * bh
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--def", dest="def_file", required=True)
@@ -102,6 +199,8 @@ def main():
     ap.add_argument("--title", default="")
     ap.add_argument("--note", default="", help="text box (area, timing)")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--no-labels", action="store_true", help="legend only, no labels on the layout")
+    ap.add_argument("--links", action="store_true", help="grid: draw each tile output link (its valid bit)")
     args = ap.parse_args()
 
     sizes = lef_sizes(args.lef)
@@ -126,13 +225,37 @@ def main():
     cmap = plt.get_cmap("tab20")
     fig_w = 10
     aspect = (die[3] - die[1]) / (die[2] - die[0]) if die else 1
-    fig, ax = plt.subplots(figsize=(fig_w + 4, fig_w * aspect + 1))
+    fig, ax = plt.subplots(figsize=(fig_w + 6, max(fig_w * aspect + 1, 8)))
     handles = []
     for i, lab in enumerate(labels):
         color = "#bbbbbb" if lab == OTHER else cmap(i % 20)
         ax.add_collection(PatchCollection(groups[lab], facecolor=color, edgecolor="none", alpha=0.9))
         n = len(groups[lab])
         handles.append(Patch(color=color, label=f"{lab} ({n})"))
+    if args.links:
+        lines = link_lines(read_def.text, comps, sizes, lef_pins(args.lef, "tile_top"), "tile_top")
+        seen = set()
+        for x0, y0, x1, y1, label, color in lines:
+            ax.plot([x0, x1], [y0, y1], color=color, lw=0.9, alpha=0.85)
+            if label not in seen:
+                seen.add(label)
+                handles.append(matplotlib.lines.Line2D([], [], color=color, label=f"link {label}"))
+        print(f"{len(lines)} link lines")
+    # Labels on top: each group's name at the median of its instances (macros:
+    # the middle of the group's bounding box), skipped for scattered leftovers.
+    if not args.no_labels:
+        for lab in labels:
+            if lab == OTHER:
+                continue
+            rects = groups[lab]
+            if lab.startswith("SRAM") or args.style == "grid" and lab.startswith("tile"):
+                cx = (min(r.get_x() for r in rects) + max(r.get_x() + r.get_width() for r in rects)) / 2
+                cy = (min(r.get_y() for r in rects) + max(r.get_y() + r.get_height() for r in rects)) / 2
+            else:
+                # densest cell of a 24 x 24 histogram: the main cluster, not the median
+                cx, cy = densest(rects, die)
+            ax.text(cx, cy, lab, ha="center", va="center", fontsize=9, weight="bold",
+                    bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.75))
     if die:
         ax.add_patch(Rectangle((die[0], die[1]), die[2] - die[0], die[3] - die[1], fill=False, lw=1.2))
         ax.set_xlim(die[0], die[2])

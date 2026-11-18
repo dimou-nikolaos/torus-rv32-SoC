@@ -116,6 +116,15 @@ def discover(args):
         tests.append(Test(f"soc{grid}.memcpy_s{tag}", [
             sys.executable, "model/perf_model.py", "run-memcpy", "--host", str(BUILD / f"tb/soc/host_memcpy_{grid}"),
             "--elf", str(BUILD / "sw/memcpy.elf"), f"--shift={shift}"], timeout=1200))
+    # M5: links through the tiles' feedthroughs (logical and folded placement):
+    # wiring only, the same results
+    for ft in (1, 2):
+        for shift in ("1,1", "2,2"):
+            tag = shift.replace(",", "_")
+            tests.append(Test(f"soc4x4_ft{ft}.memcpy_s{tag}", [
+                sys.executable, "model/perf_model.py", "run-memcpy",
+                "--host", str(BUILD / f"tb/soc/host_memcpy_4x4_ft{ft}"),
+                "--elf", str(BUILD / "sw/memcpy.elf"), f"--shift={shift}"], timeout=1200))
     # Forced plane: every copy the long way round on NoC1
     tests.append(Test("soc4x4.memcpy_s1_1_noc1", [
         sys.executable, "model/perf_model.py", "run-memcpy", "--host", str(BUILD / "tb/soc/host_memcpy_4x4"),
@@ -125,6 +134,8 @@ def discover(args):
               "--cal-host", str(BUILD / "tb/soc/host_cannon_1x1")]
     tests.append(Test("soc4x4.cannon_n64", cannon + ["--host", str(BUILD / "tb/soc/host_cannon_4x4"), "--n", "64"],
                       timeout=1800))
+    tests.append(Test("soc4x4_ft2.cannon_n64", cannon + ["--host", str(BUILD / "tb/soc/host_cannon_4x4_ft2"),
+                                                         "--n", "64"], timeout=1800))
     tests.append(Test("soc2x2.cannon_n32_noc1", cannon + ["--host", str(BUILD / "tb/soc/host_cannon_2x2"),
                                                           "--n", "32", "--plane", "noc1"], timeout=1800))
     # M4: stencil (calibrated on 1x1) and all-reduce (calibrated on 2x2),

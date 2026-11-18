@@ -19,10 +19,21 @@ export ADDITIONAL_GDS  = $(SRAM_DIR)/gds/sky130_sram_2kbyte_1rw1r_32x512_8.gds
 
 PNR_DIR = $(dir $(DESIGN_CONFIG))
 export PDN_TCL        = $(PNR_DIR)../common/pdn_sram.tcl
-export IO_CONSTRAINTS = $(PNR_DIR)io.tcl
 
-# 32 macros of 0.28 mm2 (9.1 mm2) and about 0.8 mm2 of standard cells
+# Floorplan: auto (ORFS macro placer, utilization below) or cross (hand placed,
+# pnr/tile/cross.tcl; scripts/pnr.py --floorplan cross sets TILE_FLOORPLAN and
+# the DIE_AREA and CORE_AREA computed from cross.tcl)
+TILE_FLOORPLAN ?= auto
+ifeq ($(TILE_FLOORPLAN),cross)
+export MACRO_PLACEMENT_TCL = $(PNR_DIR)macros.tcl
+export IO_CONSTRAINTS      = $(PNR_DIR)io_cross.tcl
+# 416 X-link pins per side in the 420 um arm: pins on adjacent met3 tracks
+export PLACE_PINS_ARGS     = -min_distance 1 -min_distance_in_tracks
+else
+export IO_CONSTRAINTS = $(PNR_DIR)io.tcl
+# 32 macros of 0.28 mm2 (9.1 mm2) and about 0.95 mm2 of standard cells
 export CORE_UTILIZATION ?= 60
+endif
 export PLACE_DENSITY    ?= 0.55
 export MACRO_ROWS_HALO_X ?= 20
 export MACRO_ROWS_HALO_Y ?= 20
