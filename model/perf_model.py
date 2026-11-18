@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Performance model v0 (SPEC.md, M2 and M3): memcpy and Cannon GEMM on the
+"""Performance model (SPEC.md, M2 to M4): memcpy and Cannon GEMM on the
 two-plane torus.
 
 The model routes every flit a run sends the way the RTL does (the plane with
@@ -13,15 +13,18 @@ ring) and checks a report (tb/soc/host_memcpy.cpp, host_cannon.cpp):
     writes;
   - within a tolerance, the time of the program's main phase.
 
-memcpy: the copy phase (first DMA start to last arrival) is DMA and semaphore
-setup, plus the flits of one block at the rate of the most shared link on the
-flow's path (round-robin arbitration splits a link evenly), plus the path
-latency (2 cycles per hop, 4 at the ends). It is checked only when no link
-carries two flows. With shared links the even split is optimistic: one input
-buffer then holds a flow that turns and one that continues, and a waiting
-head blocks the flit behind it (head-of-line blocking). Measured on 4x4 with
-shift (2,2): about 3300 cycles, the even split predicts 2120. v1 models the
-router queues flit by flit.
+memcpy (v1): the copy phase (first DMA start to last arrival) comes from
+model/noc_sim.py, the network flit by flit (cycle-exact against the RTL
+network: noc_sim.py check-rtl), with each tile's DMA starting SETUP cycles
+after its measured start, the semaphore increment SEM cycles after dma_wait
+returns, and the waiting tile seeing it WAIT cycles after it arrives. On
+shared links the copy phase is chaotic: a few cycles of difference in when
+tiles start moves it by up to 20% (head-of-line blocking at the router
+inputs locks flows into different phase patterns). The model therefore runs
+JITTER_RUNS times, the first with the measured start times and the others
+with each start moved by up to JITTER cycles, and gives the range; the
+measurement must fall within it, widened by the tolerance. v0 (the even split
+of shared links, no head-of-line blocking) is kept as the lower bound.
 
 Cannon: P steps of one b x b block multiply, the time a 1x1 run of the same
 kernel measured for one block (calibration), plus P-1 hand-overs: the block
@@ -41,8 +44,13 @@ import json
 import os
 import subprocess
 import sys
+import random
+import statistics
 import tempfile
 from collections import Counter
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from noc_sim import NocSim  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPORTS = os.path.join(ROOT, "build", "reports")
@@ -64,6 +72,12 @@ SETUP = 20
 TAIL = 40
 HOP = 2
 ENDS = 4
+# v1 memcpy endpoints (cycles), fitted on the uncontended 2x2 and 4x4 runs:
+# DMA start after the kernel's first CYCLE read; dma_wait returning after the
+# last flit is injected; the semaphore flit staged after that; sem_wait seeing
+# it after it arrives; and the earliest a tile finishes after its own dma_wait.
+V1_SETUP, V1_DONE, V1_SEM, V1_WAIT, V1_SELF = 20, 12, 20, 11, 47
+JITTER, JITTER_RUNS = 3, 8
 # Cannon: software of one hand-over (two dma_write, four sem_inc with their
 # channel polls, four satisfied sem_waits, timestamps): about 140 instructions
 # at the block multiply's CPI of about 1.35
@@ -178,20 +192,63 @@ def predict_memcpy(rep):
     return tr, worst, max_share
 
 
+def simulate_memcpy(rep, variant="base", jitter=0, seed=0):
+    """Copy phase of one run of the report's memcpy in the flit-level model;
+    each tile starts up to `jitter` cycles off its measured start."""
+    s = NocSim.soc(rep["nx"], rep["ny"], variant=variant)
+    forced = FORCED[rep.get("plane", "auto")]
+    flits = rep["len"] // 16
+    rng = random.Random(seed)
+    senders, arrived, res = Counter(), Counter(), {}
+    for t in rep["tiles"]:
+        senders[tuple(t["partner"])] += 1
+    for t in rep["tiles"]:
+        xy, p = (t["x"], t["y"]), tuple(t["partner"])
+        pl = s.plane(xy, p) if forced is None else forced
+        niu = s.nius[xy]
+        res[xy] = [None, None]                  # dma_wait returned, semaphore complete
+
+        def rx(f, c, xy=xy):
+            if f.tag == "sem":
+                arrived[xy] += 1
+                if arrived[xy] == senders[xy]:
+                    res[xy][1] = c
+
+        def done(c, xy=xy, niu=niu, p=p, pl=pl):
+            res[xy][0] = c + V1_DONE
+            s.at(c + V1_DONE + V1_SEM, lambda: niu.send(p, pl, "sem"))
+
+        niu.on_rx = rx
+        start = t["t"][0] + V1_SETUP + (rng.randint(-jitter, jitter) if jitter else 0)
+        s.at(max(start, 0), lambda niu=niu, p=p, pl=pl, done=done: niu.dma_write(p, flits, pl, "data", done))
+    while any(None in v for v in res.values()):
+        s.step()
+        if s.cycle > 1000 * flits:
+            raise RuntimeError("memcpy model: no progress")
+    t0 = min(t["t"][0] for t in rep["tiles"])
+    return max(max(sem + V1_WAIT, t1 + V1_SELF) for t1, sem in res.values()) - t0
+
+
+def memcpy_range(rep, variant="base"):
+    """Copy phase over JITTER_RUNS runs: the measured start times, then jittered ones."""
+    runs = [simulate_memcpy(rep, variant, JITTER if k else 0, k) for k in range(JITTER_RUNS)]
+    return runs[0], min(runs), statistics.median(runs), max(runs)
+
+
 def check_memcpy(rep, tolerance):
-    tr, copy, share = predict_memcpy(rep)
+    tr, bound, share = predict_memcpy(rep)
     ok = check_counters(rep, tr)
     meas = rep["copy_cycles"]
-    err = (copy - meas) / meas
+    exact, lo, med, hi = memcpy_range(rep)
+    err = (med - meas) / meas
     pp = tr.per_plane()
     print(f"memcpy {rep['nx']}x{rep['ny']}, {rep['len']} B per tile, shift {tuple(rep['shift'])}, plane "
-          f"{rep.get('plane', 'auto')}: copy phase {meas} cycles, model {copy} ({err:+.1%}); "
-          f"{sum(tr.links.values())} router-output flits (NoC0 {pp[0]}, NoC1 {pp[1]}), "
+          f"{rep.get('plane', 'auto')}: copy phase {meas} cycles, model {exact} at the measured starts, "
+          f"{lo}..{hi} median {med:.0f} ({err:+.1%}) with +-{JITTER} cycles of start jitter, even-split bound "
+          f"{bound}; {sum(tr.links.values())} router-output flits (NoC0 {pp[0]}, NoC1 {pp[1]}), "
           f"per-link counts {'exact' if ok else 'MISMATCH'}")
-    if share > 1:
-        print(f"links carry up to {share} flows: copy phase not checked by v0 (no head-of-line blocking model)")
-    elif abs(err) > tolerance:
-        print(f"copy phase outside the {tolerance:.0%} tolerance")
+    if not lo * (1 - tolerance) <= meas <= hi * (1 + tolerance):
+        print(f"copy phase outside the model's range widened by {tolerance:.0%}")
         ok = False
     return ok
 
@@ -325,14 +382,14 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("memcpy", help="check a memcpy report")
     a.add_argument("--report", required=True)
-    a.add_argument("--tolerance", type=float, default=0.10)
+    a.add_argument("--tolerance", type=float, default=0.05)
     b = sub.add_parser("run-memcpy", help="run host_memcpy, then check its report")
     b.add_argument("--host", required=True)
     b.add_argument("--elf", required=True)
     b.add_argument("--shift", default="1,1")
     b.add_argument("--len", default="16384")
     b.add_argument("--plane", default="auto", choices=FORCED)
-    b.add_argument("--tolerance", type=float, default=0.10)
+    b.add_argument("--tolerance", type=float, default=0.05)
     b.add_argument("--report-dir", default=REPORTS, help="where the report is kept")
     c = sub.add_parser("cannon", help="check a Cannon report against its 1x1 calibration")
     c.add_argument("--report", required=True)

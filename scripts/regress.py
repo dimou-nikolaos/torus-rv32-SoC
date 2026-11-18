@@ -58,7 +58,7 @@ def discover(args):
         for sl in (0, 1, 2):
             tests.append(Test(f"unit.router.p{d}_s{sl}", [str(BUILD / f"tb/unit/tb_router_p{d}_s{sl}")]))
     for cfg in ("2x2_p0_s0", "2x2_p1_s0", "4x4_p0_s0", "4x4_p1_s1", "4x4_p0_s2", "3x5_p0_s0", "3x5_p1_s0",
-                "4x4_p01_s0", "2x3_p01_s0_io", "4x5_p01_s0_io", "4x5_p01_s1_io", "3x4_p01_s2_io"):
+                "4x4_p01_s0", "2x3_p01_s0_io", "4x5_p0_s0_io", "4x5_p01_s0_io", "4x5_p01_s1_io", "3x4_p01_s2_io"):
         tests.append(Test(f"noc.{cfg}", [str(BUILD / f"tb/unit/tb_noc_{cfg}")]))
     tests.append(Test("noc.soak_4x4", [str(BUILD / "tb/unit/tb_noc_4x4_p0_s0"), "--soak=2000000"], timeout=1200))
     # Both planes with the I/O row, as in the 4x4 SoC
@@ -68,6 +68,14 @@ def discover(args):
     for cfg in ("3x3_p0_s0", "4x4_p0_s0"):
         tests.append(Test(f"noc.{cfg}_nobubble_deadlocks",
                           [str(BUILD / f"tb/unit/tb_noc_{cfg}_nobubble"), "--expect-deadlock"]))
+    # M4: performance model v1 cycle-exact against the RTL network (every
+    # flit's send and ejection cycle), contended patterns, one and two planes,
+    # slice depths 0 to 2
+    for cfg, shift in (("4x5_p01_s0_io", "2,2"), ("4x5_p01_s0_io", "1,-1"), ("4x5_p0_s0_io", "-1,-1"),
+                       ("4x5_p01_s1_io", "2,2"), ("3x4_p01_s2_io", "1,-1"), ("4x4_p1_s1", "-1,2")):
+        tests.append(Test(f"model.noc_{cfg}_s{shift.replace(',', '_').replace('-', 'm')}", [
+            sys.executable, "model/noc_sim.py", "check-rtl", "--tb", str(BUILD / f"tb/unit/tb_noc_{cfg}"),
+            f"--shift={shift}", "--n=512"]))
     # Elaboration must reject an input buffer below the credit round trip
     tests.append(Test("lint.link_too_shallow", lint + [
         "--top-module", "tb_link_top", "-GSLICE=1", "-GDEPTH=5",

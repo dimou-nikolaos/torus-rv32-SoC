@@ -20,6 +20,8 @@
 #include <verilated.h>
 #include <verilated_fst_c.h>
 
+#include <algorithm>
+#include <array>
 #include <map>
 #include <memory>
 #include <random>
@@ -298,6 +300,58 @@ int main(int argc, char** argv) {
     int _r = (expr);         \
     if (_r) return finish(_r); \
   } while (0)
+
+  // Stream mode (--streams=sx,sy,n --report=f), for the performance model's
+  // cycle-exact check (model/noc_sim.py check-rtl): every compute endpoint
+  // streams n flits to the one sx, sy away on the compute torus (the I/O row
+  // skipped), all from the same cycle, ejection never stalls. The report lists
+  // every flit: source, destination, plane index, cycle sent, cycle ejected.
+  if (args.flag("streams")) {
+    int sx = 0, sy = 0, n = 0;
+    TB_CHECK(sscanf(args.opt("streams").c_str(), "%d,%d,%d", &sx, &sy, &n) == 3, "--streams=sx,sy,n");
+    const int rows = kIoRow ? kGY - 1 : kGY;
+    std::vector<int> left(kN, 0);
+    auto partner = [&](int s) {
+      int x = ((s % kGX + sx) % kGX + kGX) % kGX, y = ((s / kGX + sy) % rows + rows) % rows;
+      return y * kGX + x;
+    };
+    for (int s : eps)
+      if (s / kGX < rows) left[s] = n;
+    std::map<uint32_t, std::array<uint64_t, 5>> log;   // id -> src, dst, plane, sent, ejected
+    uint32_t first_id = next_id;
+    uint64_t t0 = t;
+    auto src = [&](int s) {
+      if (!left[s]) return -1;
+      left[s]--;
+      return partner(s);
+    };
+    // Sent and ejected cycles come from the inflight table around each cycle
+    auto run = [&](auto dst_of) -> int {
+      std::map<uint32_t, Inflight> before = inflight;
+      int r = cycle(dst_of, 100);
+      for (auto& [id, f] : inflight)
+        if (!before.count(id)) log[id] = {(uint64_t)f.src, (uint64_t)f.dst, (uint64_t)plane_of(f.src, f.dst),
+                                          t - 1 - t0, 0};
+      for (auto& [id, f] : before)
+        if (!inflight.count(id)) log[id][4] = t - 1 - t0;
+      return r;
+    };
+    while (sources_pending() || !inflight.empty() || std::any_of(left.begin(), left.end(), [](int v) { return v; }))
+      RUN(run(src));
+    FILE* f = fopen(args.opt("report").c_str(), "w");
+    TB_CHECK(f, "cannot write --report");
+    fprintf(f, "{\"gx\": %d, \"gy\": %d, \"planes\": %d, \"dir\": %d, \"io_row\": %d, \"slice\": %d, \"shift\": [%d, %d], "
+            "\"n\": %d,\n \"flits\": [", kGX, kGY, kP, kDir, (int)kIoRow, kSlice, sx, sy, n);
+    for (auto& [id, e] : log)
+      fprintf(f, "%s\n  [%u, %llu, %llu, %llu, %llu, %llu]", id == first_id ? "" : ",", id - first_id,
+              (unsigned long long)e[0], (unsigned long long)e[1], (unsigned long long)e[2], (unsigned long long)e[3],
+              (unsigned long long)e[4]);
+    fprintf(f, "]}\n");
+    fclose(f);
+    printf("tb_noc: PASS streams (%d,%d) x %d flits, %zu flits, %llu cycles\n", sx, sy, n, log.size(),
+           (unsigned long long)(t - t0));
+    return 0;
+  }
 
   // 1. Zero-load latency, every source/destination pair, exact
   if (!expect_deadlock) {

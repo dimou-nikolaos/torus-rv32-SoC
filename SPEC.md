@@ -573,7 +573,7 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 ### M4: scale to 8x8
 
 - [ ] 8x8 build with Verilator threads → simulation speed recorded
-- [ ] Performance model v1, flit-level router queues → matches the RTL on the contended memcpy patterns (3285 and 4174 cycles on 4x4)
+- [x] Performance model v1, flit-level router queues → matches the RTL on the contended memcpy patterns (3285 and 4174 cycles on 4x4) (model/noc_sim.py: every router cycle by cycle; against tb_noc's stream mode every flit's send and ejection cycle is identical, one and two planes, slice depths 0 to 2, six configurations in the regression. memcpy in the SoC at the measured start times: 3289 for 3285, 4175 for 4174, 1140 for 1143. Contended patterns are chaotic: moving each tile's start by up to 3 cycles moves the copy phase by up to 20% ((1,−1): 3606..4189; NoC0 (−1,−1): 5748..6973, measured 5779), so the model gives a range over 8 jittered runs and the check requires the measurement inside it)
 - [ ] Head-of-line blocking options B and C in model v1 → gain per pattern and kernel recorded, decision in open decisions (see Open issues)
 - [ ] Head-of-line fix in RTL if it pays (option C on the X input) → router, link and deadlock tests green, contended patterns at the model's prediction, area recorded
 - [ ] Rectangle multicast op → kernel load time reduced, test passes
