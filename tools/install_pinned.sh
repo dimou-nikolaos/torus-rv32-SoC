@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the pinned OSS CAD Suite, RISC-V GCC and Python venv into a prefix.
+# Installs the pinned OSS CAD Suite, RISC-V GCC, Python venv and sky130 PDK into a prefix.
 # Used by docker/Dockerfile.
 #   usage: install_pinned.sh <versions.env> <prefix>
 set -euo pipefail
@@ -38,11 +38,18 @@ python3 -m venv "$prefix/venv"
 "$prefix/venv/bin/pip" install --no-cache-dir --upgrade pip
 "$prefix/venv/bin/pip" install --no-cache-dir \
     "pytest==${PY_PYTEST}" "pyelftools==${PY_PYELFTOOLS}" "numpy==${PY_NUMPY}" \
-    "matplotlib==${PY_MATPLOTLIB}" "pyyaml==${PY_PYYAML}"
+    "matplotlib==${PY_MATPLOTLIB}" "pyyaml==${PY_PYYAML}" "ciel==${PY_CIEL}"
+
+# sky130 PDK, standard cells only
+rm -rf "$prefix/pdk"
+"$prefix/venv/bin/ciel" enable --pdk-family sky130 --pdk-root "$prefix/pdk" -l sky130_fd_sc_hd \
+    "$SKY130_OPEN_PDKS"
 
 # Environment script. The venv goes before OSS CAD Suite, which ships its own python3.
 cat > "$prefix/env.sh" <<ENV
 export TORUS_TOOLS="$prefix"
+export PDK_ROOT="$prefix/pdk"
+export PDK=sky130A
 export PATH="$prefix/venv/bin:$prefix/riscv-gcc/bin:$prefix/oss-cad-suite/bin:\$PATH"
 ENV
 echo "Installed pinned tools into $prefix; source $prefix/env.sh"

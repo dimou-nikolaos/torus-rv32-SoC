@@ -16,6 +16,8 @@ COPY tools/versions.env tools/install_pinned.sh /tmp/tools/
 RUN /tmp/tools/install_pinned.sh /tmp/tools/versions.env /opt/torus && rm -rf /tmp/tools
 
 ENV TORUS_TOOLS=/opt/torus \
+    PDK_ROOT=/opt/torus/pdk \
+    PDK=sky130A \
     PATH=/opt/torus/venv/bin:/opt/torus/riscv-gcc/bin:/opt/torus/oss-cad-suite/bin:${PATH}
 COPY tools/versions.env /opt/torus/versions.env
 WORKDIR /work

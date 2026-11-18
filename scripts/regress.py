@@ -150,11 +150,11 @@ def discover(args):
         tests.append(Test("synth.tile", [sys.executable, "scripts/synth_area.py", "--top", "tile_top",
                                          "--flist", "rtl/tile/tile_syn.f", "--units", "core_wrap",
                                          "spm_banks", "obi_spm_adapter", "tile_ctrl", "counter_bank",
-                                         "sim_console", "niu", "noc_router", "--out", str(BUILD / "syn/tile")],
+                                         "sim_console", "niu", "noc_router", "--out", str(BUILD / "syn/tile"), "--liberty"],
                           seeded=False, timeout=1800))
         tests.append(Test("synth.io", [sys.executable, "scripts/synth_area.py", "--top", "io_tile",
                                        "--flist", "rtl/special/io_syn.f", "--units", "io_axi_front", "io_bridge",
-                                       "io_regs", "io_cdc_fifo", "--out", str(BUILD / "syn/io")],
+                                       "io_regs", "io_cdc_fifo", "--out", str(BUILD / "syn/io"), "--liberty"],
                           seeded=False, timeout=1800))
     tests.append(Test("lint.io_tile", lint + ["--top-module", "io_tile", "-f", "rtl/special/io_syn.f"],
                       seeded=False))

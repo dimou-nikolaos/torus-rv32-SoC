@@ -89,9 +89,9 @@ jobs:
           tools/print_versions.sh > build-versions.txt
           scripts/synth_area.py --top tile_top --flist rtl/tile/tile_syn.f \
             --units core_wrap spm_banks obi_spm_adapter tile_ctrl counter_bank sim_console niu noc_router \
-            --out build/syn/tile
+            --out build/syn/tile --liberty
           scripts/synth_area.py --top io_tile --flist rtl/special/io_syn.f \
-            --units io_axi_front io_bridge io_regs io_cdc_fifo --out build/syn/io
+            --units io_axi_front io_bridge io_regs io_cdc_fifo --out build/syn/io --liberty
           cp build-versions.txt build/syn/
           cat build/syn/tile_area.txt build/syn/io_area.txt >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7

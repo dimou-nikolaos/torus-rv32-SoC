@@ -116,6 +116,7 @@ class Niu:
         self.ej = [deque(), deque()]
         self.cred_q = [False, False]
         self.on_rx = None                   # callback(flit, cycle)
+        self.per_plane = False              # inject the first staged flit of each plane, not only the head
         self.ch_rr = 0
         self.tx_count = [0, 0]
         self.rx_count = [0, 0]
@@ -302,7 +303,18 @@ class NocSim:
         for r in routers.values():
             if r.busy:
                 rgrants.append((r, self._allocate(r)))
-        nsends = [n for n in nius.values() if n.stage and n.credits[n.stage[0].plane] > 0]
+        nsends = []
+        for n in nius.values():
+            if not n.stage:
+                continue
+            if n.per_plane:
+                # one staging buffer per plane (as TX-DMA and TX-reply on different planes)
+                for p in self.planes:
+                    k = next((k for k, f in enumerate(n.stage) if f.plane == p), None)
+                    if k is not None and n.credits[p] > 0:
+                        nsends.append((n, k))
+            elif n.credits[n.stage[0].plane] > 0:
+                nsends.append((n, 0))
         # 2. what the registers deliver at this edge; link slices delay the
         # flits and credits between routers, not the local ports
         deliveries = []                     # (router, queue, flit, la) or (niu, plane, flit, None)
@@ -379,8 +391,9 @@ class NocSim:
                     self.pending -= 1
                     if n.on_rx:
                         n.on_rx(f, c)
-        for n in nsends:
-            f = n.stage.popleft()
+        for n, k in sorted(nsends, key=lambda s: -s[1]):
+            f = n.stage[k]
+            del n.stage[k]
             n.out[f.plane] = (f, route(n.x, n.y, f.dx, f.dy))
             n.credits[f.plane] -= 1
             n.tx_count[f.plane] += 1

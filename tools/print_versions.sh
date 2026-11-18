@@ -13,3 +13,5 @@ v python      python3 --version
 v pytest      python3 -m pytest --version
 v spike       sh -c 'git -C "$(dirname "$0")/../third_party/spike" describe --always --dirty 2>/dev/null || echo "submodule not checked out"' "$0"
 v cv32e40x    sh -c 'git -C "$(dirname "$0")/../rtl/core/cv32e40x" rev-parse --short HEAD 2>/dev/null || echo "submodule not checked out"' "$0"
+v ciel        ciel --version
+v sky130      sh -c 'ls "$PDK_ROOT/ciel/sky130/versions" 2>/dev/null | head -1 || echo "PDK missing"'

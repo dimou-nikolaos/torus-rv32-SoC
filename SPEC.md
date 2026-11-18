@@ -589,7 +589,7 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
   | All-reduce, 1 KB per tile | 9284 | 13880 | 4 → 6 tree levels: 2321 and 2313 cycles per level, up and down (logarithmic, as expected) |
   | memcpy 16 KB, shift (1,1) | 1143 | 1273 | 90% (start skew of the go writes) |
   | memcpy 16 KB, shift (2,2) | 3285 | 5143 | contended: head-of-line blocking and starvation (Open issues) |
-- [ ] Yosys area, generic and sky130 → report stored
+- [x] Yosys area, generic and sky130 → report stored (`synth_area.py --liberty`: sky130_fd_sc_hd tt_025C_1v80 from the image's PDK, pinned open_pdks build via ciel; CI and `regress.py --synth` store both. Compute tile: 420k transistors of logic, 0.77 mm² of standard cells (routers 0.28, NIU 0.20, core 0.16, counter bank 0.06, scratchpad banks' logic 0.06); I/O tile 0.50 mm². SRAM is not mapped: the sky130 OpenRAM macro sky130_sram_2kbyte_1rw1r_32x512_8 is 683 x 417 µm, so a tile's 64 KB (32 macros) is about 9.1 mm², over 90% of a tile; an 8x8 grid about 640 mm². M5 replaces the estimate with placed macros)
 - [ ] Model calibration → error table per kernel
 - [ ] Buffer columns decision → recorded in open decisions
 
@@ -635,7 +635,7 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 | Router pipeline depth | 1, 2 or 3 stages per hop | Decided: 2 stages (buffer write, switch allocation and lookahead route computation; then switch traversal into the output register), routes computed one hop ahead | Done |
 | Torus deadlock avoidance | Dateline VCs, bubble flow control | Decided: bubble on top of credits. Both planes together, with the I/O row's stops in every Y ring, run 2M-cycle saturating soaks without deadlock, while single-plane builds without the bubble rule deadlock; the packet's `vc` bit stays reserved | Done |
 | Multicast encoding | Rectangle in the header, separate multicast flit | Open: decide with the M4 kernel-load measurements | M4 |
-| Buffer columns | None, two columns half an X ring apart | Leaning: none; enable only if a workload's model shows it needs a shared working set | M4 |
+| Buffer columns | None, two columns half an X ring apart; bigger, banked | To discuss (raised 2026-11-18: bigger and/or banked). Analysis below (Buffer columns). Leaning: decide with the M5 SRAM area and the M7 engine's bandwidth demand | M5/M7 |
 | Synthesis target | Generic Yosys cells, sky130 liberty | Leaning: generic for area trends, sky130 when timing matters | M4 |
 | Phase-2 engine | Zve32x, custom int8 matrix unit | Open: Zve32x for standard tooling, custom unit for performance per area; decided with the placed baseline of M5 | M7 |
 | FPGA board and toolchain | Board with PCIe and QDMA (Alveo or a Kintex/Virtex UltraScale+ dev board) and Vivado; smaller boards with JTAG only | Open: depends on the grid size that fits and what hardware is available | M6 |
@@ -644,6 +644,24 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 - [x] Confirm CV32E40X builds in Verilator and Yosys with the chosen frontend (M0): yes, yosys-slang, no sv2v
 - [x] Fix flit width and coordinate width: 204-bit flit, 4-bit coordinates, router grid up to 16x16 including the I/O row and buffer columns
 - [x] Pick the first GEMM size and block size so it fits 60 KB per tile with double buffering: int32, N=64 on 4x4 (16x16 blocks, 5 KB per tile with A and B double-buffered) in the regression, N=128 (32x32 blocks, 20 KB) as the long run; blocks of up to 4 KB at 0x8000..0xCFFF
+
+### Buffer columns: analysis for discussion (M4)
+
+A buffer tile is an NIU with SRAM banks and no core: it serves WRITEs and READ\_REQs only. `model/bufcol_study.py` (8x8, buffer columns at x = 4 and 9, GX = 10; 256 KB fetched by the 64 compute tiles):
+
+| Layout | Reply engines per buffer tile | Aggregate | Per compute tile |
+| --- | --- | --- | --- |
+| Row-local: each tile reads the nearest buffer tile in its row | 1 | 15.9 flits/cycle | 4.0 B/cycle |
+| Row-local | 2 (one per plane) | 31.5 flits/cycle | 7.9 B/cycle |
+| Interleaved over all 16 buffer tiles | 1 | 9.9 flits/cycle | 2.5 B/cycle |
+| Interleaved | 2 | 14.9 flits/cycle | 3.7 B/cycle |
+
+- Bandwidth is set by reply engines and router local ports, not by size: each buffer tile delivers at most one flit per cycle per plane (two with an engine per plane, the router's local-port limit). A compute tile's own scratchpad gives its NIU 16 B per cycle per port.
+- Banking inside a buffer tile (two reply engines, at least four 128-bit banks for two reads and two writes per cycle; with 1rw1r macros a bank reads and writes at once) doubles bandwidth. Interleaving addresses across buffer tiles lowers it: longer paths, more contention (head-of-line blocking and starvation, Open issues). Row-local mapping is the better default.
+- Bigger costs area linearly and buys capacity only: in sky130 a byte of OpenRAM SRAM is about 140 µm², so 256 KB per buffer tile is about 36 mm² (four compute tiles' area each); 16 such tiles about 580 mm², roughly the 8x8 compute grid again. 64 KB per buffer tile: about 146 mm² (+23%) for +25% memory. The same bytes as more scratchpad per compute tile cost the same SRAM area with local bandwidth and no new tile type; buffer columns pay off only for a working set shared by many tiles (GEMM panels reused down a column, I/O staging).
+- Demand today: the scalar kernels need almost nothing (Cannon b=32: 256 flits per 124k-cycle block multiply). With an M7 engine at, say, 64 MAC per cycle the same block takes about 500 cycles, and 64 tiles would ask for about 64 flits per cycle, twice what two-engine buffer columns deliver.
+- Complexity: new tile type (NIU, banks, arbiter with four ports; reuses verified blocks); a second reply engine touches the NIU; the SoC generator, SDK (`compute_grid`, `neighbor`), libtorus and both models handle non-contiguous compute columns; X rings 2 hops longer (latency only for neighbour patterns; the bubble rule is unchanged); the READ\_REQ queue is sized for every requester (72 entries at 8x8).
+- Risk: physical (128 macros for 256 KB in one edge column, 128-bit banks built from four 32-bit macros, congestion, macro timing, all unknown before M5); FPGA (16 x 256 KB = 4 MB of block RAM only fits large boards, M6); verification effort (new tile, SoC configurations with the columns, kernels that use them).
 
 ## Open issues
 
