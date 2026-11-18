@@ -5,6 +5,7 @@
 #include <verilated.h>
 #include <verilated_fst_c.h>
 
+#include <chrono>
 #include <stdexcept>
 
 #include "Vtb_soc_top.h"
@@ -39,6 +40,7 @@ struct SimHost::Impl {
   std::unique_ptr<SpikeCosim> cosim[kN];
   std::string line[kN];
   std::vector<int> pending_writes;
+  std::chrono::steady_clock::time_point t_start = std::chrono::steady_clock::now();
 
   void eval() {
     dut->eval();
@@ -189,8 +191,13 @@ bool SimHost::all_exited() const {
 bool SimHost::failed() const { return impl_->any_failed || impl_->ctx->gotError(); }
 
 void SimHost::finish() {
-  if (impl_->tfp) impl_->tfp->close();
-  impl_->dut->final();
+  Impl& s = *impl_;
+  if (s.tfp) s.tfp->close();
+  s.dut->final();
+  double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - s.t_start).count();
+  printf("simulation: %llu fabric cycles in %.1f s (%.2f kHz, %u Verilator threads, lockstep %s)\n",
+         (unsigned long long)s.fcycles, wall, s.fcycles / wall / 1e3, s.dut->threads(),
+         s.cosim[0] ? "on" : "off");
 }
 
 }  // namespace torus

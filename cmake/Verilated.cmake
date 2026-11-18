@@ -61,10 +61,14 @@ function(torus_verilated_tb name)
                    --timing ${CMAKE_SOURCE_DIR}/rtl/lint/vendor.vlt ${opts} ${TB_ARGS})
 endfunction()
 
-# torus_verilated_lib(<name> TOP <module> FLISTS <f>... SV <extra .sv>... CPP <sources>...)
-# The same as a static library, for several programs sharing one model.
+# torus_verilated_lib(<name> TOP <module> [THREADS <n>] FLISTS <f>... SV <extra .sv>... CPP <sources>...)
+# The same as a static library, for several programs sharing one model;
+# THREADS > 1 builds a multithreaded model.
 function(torus_verilated_lib name)
-  cmake_parse_arguments(TB "" "TOP" "FLISTS;SV;CPP;ARGS" ${ARGN})
+  cmake_parse_arguments(TB "" "TOP;THREADS" "FLISTS;SV;CPP;ARGS" ${ARGN})
+  if(NOT TB_THREADS)
+    set(TB_THREADS 1)
+  endif()
   set(srcs "")
   set(opts "")
   foreach(f IN LISTS TB_FLISTS)
@@ -86,6 +90,7 @@ function(torus_verilated_lib name)
     SOURCES ${srcs}
     TOP_MODULE ${TB_TOP}
     PREFIX V${TB_TOP}
+    THREADS ${TB_THREADS}
     TRACE_FST
     OPT_SLOW -O0
     VERILATOR_ARGS -Wall -Werror-USERFATAL -Werror-USERERROR --assert

@@ -572,15 +572,23 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 
 ### M4: scale to 8x8
 
-- [ ] 8x8 build with Verilator threads → simulation speed recorded
+- [x] 8x8 build with Verilator threads → simulation speed recorded (`TORUS_SOC_THREADS`, default 8; memcpy 8x8 with mostly idle cores: 3.3 / 4.7 / 5.5 kHz at 4 / 8 / 12 threads on 16 cores, 4x4 single-threaded 6.1 kHz; with every core computing, two runs sharing the machine: 0.4–0.7 kHz; Spike lockstep costs under 5%)
 - [x] Performance model v1, flit-level router queues → matches the RTL on the contended memcpy patterns (3285 and 4174 cycles on 4x4) (model/noc_sim.py: every router cycle by cycle; against tb_noc's stream mode every flit's send and ejection cycle is identical, one and two planes, slice depths 0 to 2, six configurations in the regression. memcpy in the SoC at the measured start times: 3289 for 3285, 4175 for 4174, 1140 for 1143. Contended patterns are chaotic: moving each tile's start by up to 3 cycles moves the copy phase by up to 20% ((1,−1): 3606..4189; NoC0 (−1,−1): 5748..6973, measured 5779), so the model gives a range over 8 jittered runs and the check requires the measurement inside it)
-- [ ] Head-of-line blocking options B and C in model v1 → gain per pattern and kernel recorded, decision in open decisions (see Open issues)
-- [ ] Head-of-line fix in RTL if it pays (option C on the X input) → router, link and deadlock tests green, contended patterns at the model's prediction, area recorded
+- [x] Head-of-line blocking options B and C in model v1 → gain per pattern and kernel recorded, decision in open decisions (see Open issues: B, C, deeper buffers, the critical bubble scheme and dateline VCs, alone and combined, on 4x4 and 8x8; decided 2026-11-18: no router change in M4)
+- [x] ~~Head-of-line fix in RTL if it pays (option C on the X input)~~ → does not pay across patterns: C loses 18% on (1,−1) at 8x8 and long paths stay 3x off the bound with every variant (see Open issues); no RTL change
 - [ ] Rectangle multicast op → kernel load time reduced, test passes
-- [ ] 2D stencil kernel → bit-exact
-- [ ] Reduction kernel → bit-exact
-- [ ] Full kernel suite at 8x8 → all pass
-- [ ] Scaling 4x4 to 8x8 → efficiency measured
+- [x] 2D stencil kernel → bit-exact (sw/kernels/stencil, tb/soc/host_stencil.cpp: five-point Jacobi on a periodic int32 grid, one b x b block per tile, halos double-buffered by step parity with one arrival semaphore per direction; model: a 1x1 step plus two hop latencies per hop to the farthest neighbour, 4x4 −0.0%, 8x8 −0.3%, per-link counts exact)
+- [x] Reduction kernel → bit-exact (sw/kernels/reduce, tb/soc/host_reduce.cpp: all-reduce of an int32 vector, binary trees along the rows, then column 0, then the sum back down; model calibrated on 2x2: 4x4 +0.9%, 8x8 +1.4%, per-link counts exact)
+- [x] Full kernel suite at 8x8 → all pass (`regress.py --long`: memcpy (1,1) and (2,2), Cannon N=128, stencil, reduce; bit-exact, per-link counts exact, Cannon −0.7%, stencil −0.3%, reduce +1.4%, memcpy (2,2) inside the model's range. The memcpy kernel now waits for a go word the host writes once every tile runs: at 8x8 the launch takes about 150 cycles and early copies reached tiles whose counters were not running yet)
+- [x] Scaling 4x4 to 8x8 → efficiency measured (same work per tile):
+
+  | Kernel | 4x4 | 8x8 | Efficiency |
+  | --- | --- | --- | --- |
+  | Stencil, b=16, 8 steps | 50087 | 50213 | 99.7% (weak scaling) |
+  | Cannon, b=16 (N = 64, 128) | 75572 | 151548 | 98.6% and 98.3% against P block multiplies of a 1x1 tile |
+  | All-reduce, 1 KB per tile | 9284 | 13880 | 4 → 6 tree levels: 2321 and 2313 cycles per level, up and down (logarithmic, as expected) |
+  | memcpy 16 KB, shift (1,1) | 1143 | 1273 | 90% (start skew of the go writes) |
+  | memcpy 16 KB, shift (2,2) | 3285 | 5143 | contended: head-of-line blocking and starvation (Open issues) |
 - [ ] Yosys area, generic and sky130 → report stored
 - [ ] Model calibration → error table per kernel
 - [ ] Buffer columns decision → recorded in open decisions
@@ -631,7 +639,7 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 | Synthesis target | Generic Yosys cells, sky130 liberty | Leaning: generic for area trends, sky130 when timing matters | M4 |
 | Phase-2 engine | Zve32x, custom int8 matrix unit | Open: Zve32x for standard tooling, custom unit for performance per area; decided with the placed baseline of M5 | M7 |
 | FPGA board and toolchain | Board with PCIe and QDMA (Alveo or a Kintex/Virtex UltraScale+ dev board) and Vivado; smaller boards with JTAG only | Open: depends on the grid size that fits and what hardware is available | M6 |
-| Router head-of-line blocking | Deeper buffers; searchable shared input buffer; split X input (continue / leave) with per-queue credits; one queue per output on every input; software scheduling | Open: see Open issues. Prototype in performance model v1 first | M4 |
+| Router head-of-line blocking | Deeper buffers; searchable shared input buffer; split X input (continue / leave) with per-queue credits; one queue per output on every input; critical bubble; dateline VCs; software scheduling | Decided (M4): no router change. Model v1 shows no single-router variant wins across patterns (see Open issues); contended copies are phased in software. Revisit with 8x8 kernel traffic and the M5 area and timing | Done (M4) |
 
 - [x] Confirm CV32E40X builds in Verilator and Yosys with the chosen frontend (M0): yes, yosys-slang, no sv2v
 - [x] Fix flit width and coordinate width: 204-bit flit, 4-bit coordinates, router grid up to 16x16 including the I/O row and buffer columns
@@ -639,7 +647,7 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 
 ## Open issues
 
-### Head-of-line blocking at the router turn (found in M2, measured in M3)
+### Head-of-line blocking at the router turn (found in M2, measured in M3, decided in M4)
 
 Problem. Each router input has one FIFO. On the X input, flits that continue on X, flits that turn to Y and flits that eject share it. A turning flit at the head waits when the Y output is busy with a flow continuing on Y, or when the bubble rule wants two credits there; the flit behind it, bound for the idle X output, waits too. With single-flit packets and fixed routes this is the only coupling between flows that do not share an output.
 
@@ -664,3 +672,19 @@ Options:
 | E | Software: phase transfers so links are not shared | Kernels and libraries | Pattern-specific | None in hardware |
 
 Plan: (1) performance model v1, flit-level router queues, validated against the current RTL (3285 and 4174 cycles above); it is also the M4 calibration model. (2) Prototype B and C in the model and measure memcpy and the M4 kernels. (3) Implement C in RTL, limited to the X input, if the gain justifies the area and the re-proof.
+
+Result (M4, model v1, cycle-exact against the RTL network; `model/noc_sim.py`). Two losses, not one: head-of-line blocking, and injection starvation under the bubble rule (a flit entering a ring needs two credits, so continuing ring traffic that refills every freed slot can hold an injection off for thousands of cycles; with HOL removed, alternate tiles of a row stop injecting). Every tile streams 512 flits to the tile at the given shift on 8x8 with both planes, starts spread over 40 cycles, median of 3–4 runs, in cycles:
+
+| Shift | Busiest-link bound | base (RTL) | B | C | dateline VCs | C + VCs |
+| --- | --- | --- | --- | --- | --- | --- |
+| (1,−1) | 3584 | 4536 | 4408 | 5362 | 4131 | 4130 |
+| (2,2) | 1024 | 2295 | 2227 | 1194 | 1480 | 1076 |
+| (2,1) | 1024 | 1301 | 1270 | 1068 | 1132 | 1068 |
+| (1,2) | 1024 | 1305 | 1074 | 1293 | 1177 | 1177 |
+| (3,3) | 1536 | 4310 | 3922 | 3971 | 6198 | 5459 |
+| (4,4) | | 5132 | 4024 | 4894 | 5113 | 4962 |
+| (1,1), (0,1) | 512 | 560 | 560 | 560 | 560 | 560 |
+
+Also tried: deeper input buffers (depth 8, 12) fix (1,2) (an X-to-Y turn effect) and nothing else; the critical bubble scheme (one marked free slot per ring, entering flits need one credit) is deadlock-free but lets rings fill, and saturated random traffic on 8x8 drops 4x; a time-bounded starvation guard (continuing flits yield after an injection waits) collapses to tens of thousands of cycles when routers hold in step. Under saturating random traffic B and C deliver 5–13% more than base, dateline VCs about 22% less than the bubble rule. Long paths ((3,3), (4,4)) stay 3x off the bound with every variant: the links are 30–36% busy because blocking chains across hops (with C, a flit continuing here and leaving at the next router still waits for that router's leave queue). Nearest-neighbour patterns, which Cannon and the stencil use, run at full rate on every variant. Contended patterns are also chaotic: a few cycles of launch skew move them by up to 20%.
+
+Decision (2026-11-18): no router change in M4. Contended many-hop copies are phased in software (option E); the issue is revisited with 8x8 kernel traffic and the M5 area and timing, where a per-output queue scheme (D) or VCs could be weighed against their cost.

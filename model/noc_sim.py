@@ -28,6 +28,19 @@ Head-of-line variants (SPEC.md, Open issues):
         leave queue (turning to Y or ejecting), each DEPTH deep with its own
         credits; the bubble rule guards the continue queues (the X ring
         cycle); a flit that leaves X at the next router needs one credit
+
+and, combinable with base and C, two other ways to keep the rings
+deadlock-free:
+
+  cbs   critical bubble scheme: one marked free slot per ring; entering flits
+        need one free slot that is not the marked one, a continuing flit that
+        takes the marked slot moves the mark upstream (a flag on its credit)
+  vcs   dateline VCs instead of the bubble rule: a flit enters each ring on
+        VC0 and moves to VC1 on that ring's wraparound link; every move needs
+        one credit
+
+The results and the decision (no router change in M4) are in SPEC.md, Open
+issues. check-rtl runs tb_noc's stream mode and compares every flit.
 """
 import argparse
 import json
@@ -40,6 +53,7 @@ from collections import deque
 
 L, X, Y = 0, 1, 2
 XL = 3          # option C: the X input's leave queue
+XV1, YV1 = 4, 5  # dateline VCs: the X (continue) and Y queues of VC1
 
 
 def credit_rtt(slices):
@@ -63,7 +77,8 @@ def route(x, y, dx, dy):
 
 
 class Router:
-    __slots__ = ("x", "y", "p", "nx", "ny", "q", "qport", "credits", "out", "cred_q", "rr", "nq", "busy", "starve")
+    __slots__ = ("x", "y", "p", "nx", "ny", "q", "qport", "credits", "crit", "out", "cred_q", "cred_crit", "rr", "nq",
+                 "busy")
 
     def __init__(self, x, y, p, gx, gy, nq, depth):
         step = 1 if p == 0 else -1
@@ -71,20 +86,21 @@ class Router:
         self.nx, self.ny = (x + step) % gx, (y + step) % gy    # coordinates one hop on along X and Y
         self.nq = nq
         self.q = [deque() for _ in range(nq)]
-        self.qport = [L, X, Y, X][:nq]
+        self.qport = [L, X, Y, X, X, Y][:nq]
         # credits[o][k]: free slots in queue k of the router (or NIU) behind output o
-        self.credits = [[depth], [depth] * (2 if nq == 4 else 1), [depth]]
-        if nq == 4:
-            self.credits[X] = [0, depth, 0, depth]
-        else:
-            self.credits[X] = [0, depth]
-        self.credits[Y] = [0, 0, depth]
-        self.credits[L] = [depth]
+        self.credits = [[0] * 6 for _ in range(3)]
+        self.credits[L][0] = depth
+        for k in (X, XL, XV1):
+            self.credits[X][k] = depth
+        for k in (Y, YV1):
+            self.credits[Y][k] = depth
+        # crit[o][k]: CBS, the ring's critical bubble is one of those free slots
+        self.crit = [[False] * len(c) for c in self.credits]
         self.out = [None, None, None]       # (flit, la at the next router, downstream queue)
         self.cred_q = [False] * nq          # credit register per input queue
+        self.cred_crit = [False] * nq       # ... and whether the slot it frees is the critical bubble
         self.rr = [0, 0, 0]
         self.busy = False
-        self.starve = [0, 0, 0]             # per output: cycles an entering flit has waited
 
 
 class Niu:
@@ -120,20 +136,29 @@ class NocSim:
     and south, 1: NoC1 west and north); flits carry the direction."""
 
     def __init__(self, gx, gy, io_row=True, planes=(0, 1), variant="base", slices=0, stage=4, ej_stall=0.0,
-                 seed=1, bubble=True, guard=0):
+                 seed=1, bubble=True, cbs=False, vcs=False):
         self.gx, self.gy, self.io_row, self.planes = gx, gy, io_row, tuple(planes)
         self.nx, self.ny = gx, gy - 1 if io_row else gy
         self.variant = variant
         self.bubble = bubble
-        self.guard = guard                  # starvation guard: after this many cycles (0: off) ...
+        self.cbs = cbs
+        # Dateline VCs instead of the bubble rule: a flit enters each ring on
+        # VC0 and moves to VC1 when it crosses that ring's wraparound link
+        self.vcs = vcs
         self.slices = slices
         self.depth = credit_rtt(slices) + 1
-        nq = 4 if variant == "C" else 3
+        nq = 6 if vcs else 4 if variant == "C" else 3
         self.routers = {}
         for p in self.planes:
             for y in range(gy):
                 for x in range(gx):
                     self.routers[(x, y, p)] = Router(x, y, p, gx, gy, nq, self.depth)
+            if cbs:
+                # one critical bubble per ring, in the queue behind router 0's output
+                for y in range(gy):
+                    self.routers[(0, y, p)].crit[X][X] = True
+                for x in range(gx):
+                    self.routers[(x, 0, p)].crit[Y][Y] = True
         self.nius = {}
         for y in range(gy):
             for x in range(gx):
@@ -164,29 +189,35 @@ class NocSim:
     def at(self, cycle, fn):
         self.timers.append((cycle, fn))
 
-    def _queue_of(self, port, la):
+    def _queue_of(self, port, la, vc=0):
         if self.variant == "C" and port == X and la != X:
             return XL
+        if vc:
+            return XV1 if port == X else YV1
         return port
 
-    def _need(self, qport, o, dq):
-        """Credits a flit from an input on port qport needs to go out on o into downstream queue dq."""
-        if o == L or not self.bubble:
-            return 1
-        entering = (o == X and qport == L) or (o == Y and qport != Y)
-        if not entering:
-            return 1
-        if self.variant == "C" and o == X and dq == XL:
-            return 1
-        return 2
+    def _eligible(self, r, qport, o, dq):
+        """Whether a flit from an input on port qport may go out on o into
+        downstream queue dq now. A flit entering a ring queue (injection, the
+        X-to-Y turn) must leave a free slot behind it: two credits (bubble
+        rule), or with CBS one that is not the ring's critical bubble. The leave
+        queues of option C are not part of the ring cycle."""
+        free = r.credits[o][dq]
+        if self.vcs or o == L or not self.bubble or not ((o == X and qport == L) or (o == Y and qport != Y)) or dq == XL:
+            return free >= 1
+        if self.cbs:
+            return free >= 1 + r.crit[o][dq]
+        return free >= 2
 
-    def _next(self, r, o, f):
-        """(la at the next router, its queue) for flit f leaving r on output o."""
+    def _next(self, r, o, f, k=0):
+        """(la at the next router, its queue) for flit f from queue k leaving r on output o."""
         if o == X:
             la = route(r.nx, r.y, f.dx, f.dy)
-            return la, self._queue_of(X, la)
+            vc = self.vcs and (k == XV1 or r.nx == (0 if r.p == 0 else self.gx - 1))
+            return la, self._queue_of(X, la, vc)
         if o == Y:
-            return route(r.x, r.ny, f.dx, f.dy), Y
+            vc = self.vcs and (k == YV1 or r.ny == (0 if r.p == 0 else self.gy - 1))
+            return route(r.x, r.ny, f.dx, f.dy), self._queue_of(Y, None, vc)
         return L, 0
 
     # ------------------------------------------------------------- allocation
@@ -203,8 +234,8 @@ class NocSim:
                     if seen >> la & 1:
                         continue
                     seen |= 1 << la
-                    nla, dq = self._next(r, la, f)
-                    if credits[la][dq] >= self._need(r.qport[k], la, dq):
+                    nla, dq = self._next(r, la, f, k)
+                    if self._eligible(r, r.qport[k], la, dq):
                         offers.setdefault(la, {})[k] = (idx, nla, dq)
                     if seen == 7:
                         break
@@ -224,45 +255,33 @@ class NocSim:
             return grants
         heads = []
         ev = self.events
-        guard = self.guard
-        waiting = 0                         # outputs with an entering head (needs two credits)
         for k in range(r.nq):
             if q[k]:
                 f, la = q[k][0]
-                nla, dq = self._next(r, la, f)
-                need = self._need(r.qport[k], la, dq)
-                if need == 2:
-                    waiting |= 1 << la
-                if credits[la][dq] >= need:
-                    heads.append((k, la, nla, dq, need))
+                nla, dq = self._next(r, la, f, k)
+                if self._eligible(r, r.qport[k], la, dq):
+                    heads.append((k, la, nla, dq))
                 elif ev is not None:
                     key = (r.x, r.y, r.p)
                     if credits[la][dq] == 0:
                         ev[key + ("cstall", la)] = ev.get(key + ("cstall", la), 0) + 1
                     else:
                         ev[key + ("bhold", la)] = ev.get(key + ("bhold", la), 0) + 1
-        if guard:
-            for o in (X, Y):
-                r.starve[o] = r.starve[o] + 1 if waiting >> o & 1 else 0
         if not heads:
             return grants
         for o in (L, X, Y):
             best, bd = None, None
-            hold = guard and r.starve[o] > guard
-            for k, la, nla, dq, need in heads:
-                if la != o or (hold and need == 1):
+            for k, la, nla, dq in heads:
+                if la != o:
                     continue
                 d = (k - r.rr[o] - 1) % r.nq
                 if bd is None or d < bd:
                     best, bd = (k, 0, o, nla, dq), d
-                    best_need = need
             if best:
                 grants.append(best)
-                if best_need == 2:
-                    r.starve[o] = 0
         if ev is not None:
             won = {g[0] for g in grants}
-            for k, la, nla, dq, _ in heads:
+            for k, la, nla, dq in heads:
                 if k not in won:
                     key = (r.x, r.y, r.p, "arbloss", r.qport[k])
                     ev[key] = ev.get(key, 0) + 1
@@ -287,7 +306,7 @@ class NocSim:
         # 2. what the registers deliver at this edge; link slices delay the
         # flits and credits between routers, not the local ports
         deliveries = []                     # (router, queue, flit, la) or (niu, plane, flit, None)
-        credit_rx = []                      # (router or niu, output, queue)
+        credit_rx = []                      # (router or niu, output, queue, critical)
         ring_d, ring_c = (deliveries, credit_rx) if not self.slices else ([], [])
         for r in routers.values():
             for o in (L, X, Y):
@@ -305,20 +324,20 @@ class NocSim:
                 if r.cred_q[k]:
                     port = r.qport[k]
                     if port == L:
-                        credit_rx.append((nius[(r.x, r.y)], r.p, None))
+                        credit_rx.append((nius[(r.x, r.y)], r.p, None, False))
                     elif port == X:
                         up = routers[((r.x - (1 if r.p == 0 else -1)) % self.gx, r.y, r.p)]
-                        ring_c.append((up, X, k))
+                        ring_c.append((up, X, k, r.cred_crit[k]))
                     else:
                         up = routers[(r.x, (r.y - (1 if r.p == 0 else -1)) % self.gy, r.p)]
-                        ring_c.append((up, Y, k))
+                        ring_c.append((up, Y, k, r.cred_crit[k]))
         for n in nius.values():
             for p in self.planes:
                 if n.out[p] is not None:
                     f, la = n.out[p]
                     deliveries.append((routers[(n.x, n.y, p)], L, f, la))
                 if n.cred_q[p]:
-                    credit_rx.append((routers[(n.x, n.y, p)], L, 0))
+                    credit_rx.append((routers[(n.x, n.y, p)], L, 0, False))
         if self.slices:
             self.inflight.append((c + self.slices, ring_d, ring_c))
             while self.inflight and self.inflight[0][0] <= c:
@@ -329,6 +348,7 @@ class NocSim:
         for r in routers.values():
             r.out = [None, None, None]
             r.cred_q = [False] * r.nq
+            r.cred_crit = [False] * r.nq
         for r, grants in rgrants:
             for k, idx, o, nla, dq in grants:
                 if idx == 0:
@@ -337,6 +357,11 @@ class NocSim:
                     f, _ = r.q[k][idx]
                     del r.q[k][idx]
                 r.out[o] = (f, nla, dq)
+                if r.crit[o][dq] and r.credits[o][dq] == 1:
+                    # a flit continuing on its ring takes the critical bubble:
+                    # the slot it frees here becomes the critical one
+                    r.crit[o][dq] = False
+                    r.cred_crit[k] = True
                 r.credits[o][dq] -= 1
                 r.cred_q[k] = True
                 r.rr[o] = k
@@ -368,11 +393,13 @@ class NocSim:
                 tgt.ej[k].append(f)
             else:
                 tgt.q[k].append((f, la))
-        for tgt, o, k in credit_rx:
+        for tgt, o, k, crit in credit_rx:
             if k is None:
                 tgt.credits[o] += 1
             else:
                 tgt.credits[o][k] += 1
+                if crit:
+                    tgt.crit[o][k] = True
         # DMA: one flit per cycle into staging, channels interleaved
         for n in nius.values():
             if n.dma and len(n.stage) < n.stage_depth:
@@ -387,11 +414,13 @@ class NocSim:
         self.cycle = c + 1
 
 
-def streams(gx, gy, io_row, planes, shift, n, variant="base", slices=0):
+def streams(gx, gy, io_row, planes, shift, n, variant="base", slices=0, jitter=0, seed=1, vcs=False):
     """tb_noc's stream mode: every compute endpoint sends n flits to the one
-    shift away on the compute torus, all from cycle 0, ejection never stalls.
+    shift away on the compute torus, all from cycle 0 (or each from a random
+    cycle up to `jitter`), ejection never stalls.
     Returns {(src, seq): (dst, plane, sent, ejected)} with nodes as y * gx + x."""
-    sim = NocSim(gx, gy, io_row, planes, variant, slices)
+    sim = NocSim(gx, gy, io_row, planes, variant, slices, vcs=vcs)
+    rng = random.Random(seed)
     out = {}
     for (x, y), niu in sim.nius.items():
         if y >= sim.ny:
@@ -399,9 +428,12 @@ def streams(gx, gy, io_row, planes, shift, n, variant="base", slices=0):
         d = ((x + shift[0]) % sim.nx, (y + shift[1]) % sim.ny)
         p = sim.plane((x, y), d)
         niu.on_rx = lambda f, c: out.__setitem__(f.tag, (f.dx + gx * f.dy, f.plane, f.t_inj, c))
-        for k in range(n):
-            niu.stage_depth = 1 << 30
-            niu.stage.append(Flit(d[0], d[1], p, (y * gx + x, k)))
+        niu.stage_depth = 1 << 30
+        flits = [Flit(d[0], d[1], p, (y * gx + x, k)) for k in range(n)]
+        if jitter:
+            sim.at(rng.randint(0, jitter), lambda niu=niu, flits=flits: niu.stage.extend(flits))
+        else:
+            niu.stage.extend(flits)
     total = n * sum(1 for (x, y) in sim.nius if y < sim.ny)
     while len(out) < total:
         sim.step()
@@ -410,10 +442,12 @@ def streams(gx, gy, io_row, planes, shift, n, variant="base", slices=0):
     return out, sim
 
 
-def soak(gx, gy, io_row, planes, variant, cycles, ej_stall, seed=1, bubble=True, watchdog=2000):
+def soak(gx, gy, io_row, planes, variant, cycles, ej_stall, seed=1, bubble=True, cbs=False, vcs=False,
+         watchdog=2000):
     """Every endpoint always has a flit to a random endpoint, ejection stalls
     with probability ej_stall. Returns (delivered, deadlocked)."""
-    sim = NocSim(gx, gy, io_row, planes, variant, ej_stall=ej_stall, seed=seed, bubble=bubble)
+    sim = NocSim(gx, gy, io_row, planes, variant, ej_stall=ej_stall, seed=seed, bubble=bubble, cbs=cbs,
+                 vcs=vcs)
     rng = random.Random(seed)
     eps = list(sim.nius)
     got = [0]

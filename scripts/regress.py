@@ -119,7 +119,27 @@ def discover(args):
                       timeout=1800))
     tests.append(Test("soc2x2.cannon_n32_noc1", cannon + ["--host", str(BUILD / "tb/soc/host_cannon_2x2"),
                                                           "--n", "32", "--plane", "noc1"], timeout=1800))
+    # M4: stencil (calibrated on 1x1) and all-reduce (calibrated on 2x2),
+    # bit-exact, exact per-link counts, kernel time within tolerance
+    def kernel(name, grid, cal_grid, *opts):
+        return [sys.executable, "model/perf_model.py", "run-kernel", "--kernel", name,
+                "--host", str(BUILD / f"tb/soc/host_{name}_{grid}"),
+                "--cal-host", str(BUILD / f"tb/soc/host_{name}_{cal_grid}"),
+                "--elf", str(BUILD / f"sw/{name}.elf"), *opts]
+    tests.append(Test("soc4x4.stencil", kernel("stencil", "4x4", "1x1"), timeout=1200))
+    tests.append(Test("soc2x2.stencil_noc1", kernel("stencil", "2x2", "1x1", "--plane", "noc1", "--b", "8"),
+                      timeout=1200))
+    tests.append(Test("soc4x4.reduce", kernel("reduce", "4x4", "2x2"), timeout=1200))
     if args.long:
+        # M4 exit: the kernel suite at 8x8 (multithreaded model)
+        for shift in ("1,1", "2,2"):
+            tests.append(Test(f"long.soc8x8.memcpy_s{shift.replace(',', '_')}", [
+                sys.executable, "model/perf_model.py", "run-memcpy", "--host", str(BUILD / "tb/soc/host_memcpy_8x8"),
+                "--elf", str(BUILD / "sw/memcpy.elf"), f"--shift={shift}"], timeout=3600))
+        tests.append(Test("long.soc8x8.cannon_n128", cannon + ["--host", str(BUILD / "tb/soc/host_cannon_8x8"),
+                                                                "--n", "128"], timeout=7200))
+        tests.append(Test("long.soc8x8.stencil", kernel("stencil", "8x8", "1x1"), timeout=3600))
+        tests.append(Test("long.soc8x8.reduce", kernel("reduce", "8x8", "2x2"), timeout=3600))
         tests.append(Test("long.soc4x4.cannon_n128", cannon + ["--host", str(BUILD / "tb/soc/host_cannon_4x4"),
                                                                 "--n", "128"], timeout=7200))
         tests.append(Test("long.planes", [sys.executable, "model/perf_model.py", "planes", "--build", str(BUILD)],

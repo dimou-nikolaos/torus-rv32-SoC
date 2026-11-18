@@ -5,7 +5,9 @@
 // number of tiles sending to it, its incoming blocks are complete (SPEC.md,
 // Ordering and completion: producer to consumer). Each tile records when it
 // started, when its DMA was injected and when its data had arrived, on the
-// CYCLE counter all tiles share since reset.
+// CYCLE counter all tiles share since reset. With args.go the copy waits until
+// the host has seen every tile start: on large grids the launch takes long
+// enough that early copies would reach tiles whose counters do not run yet.
 #include <stdint.h>
 
 #include "tile.h"
@@ -19,12 +21,16 @@ struct args {
   uint32_t sem;       // arrival semaphore, same address on every tile, zero at launch
   uint32_t result;    // where to record t_start, t_injected, t_arrived (low words)
   uint32_t plane;     // NIU_PLANE_* for the copy and its semaphore
+  uint32_t go;        // if not 0: a word to wait on before starting (the host sets it once every tile runs)
 };
 
 int kernel_main(const args_t *a) {
   xy_t partner = {(uint8_t)(a->partner & 0xff), (uint8_t)(a->partner >> 8)};
   volatile uint32_t *res = (volatile uint32_t *)a->result;
   noc_set_plane(a->plane);
+  if (a->go)
+    while (*(volatile uint32_t *)a->go == 0) {
+    }
   uint32_t t0 = (uint32_t)tile_cycles();
   dma_write(0, a->src, partner, a->dst, a->len);
   dma_wait(0);

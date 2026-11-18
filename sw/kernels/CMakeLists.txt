@@ -5,3 +5,5 @@ torus_tile_program(pingpong SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/pingpong/pingpon
 torus_tile_program(nocops SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/nocops/nocops.c)
 torus_tile_program(memcpy SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/memcpy/memcpy.c)
 torus_tile_program(cannon SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/cannon/cannon.c)
+torus_tile_program(stencil SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/stencil/stencil.c)
+torus_tile_program(reduce SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/reduce/reduce.c)

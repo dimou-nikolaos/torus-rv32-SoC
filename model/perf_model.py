@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Performance model (SPEC.md, M2 to M4): memcpy and Cannon GEMM on the
-two-plane torus.
+"""Performance model (SPEC.md, M2 to M4): memcpy, Cannon GEMM, stencil and
+all-reduce on the two-plane torus.
 
 The model routes every flit a run sends the way the RTL does (the plane with
 fewer hops, ties to NoC0, unless a program forces one; X first on one-way
@@ -32,12 +32,19 @@ shifts run under the compute, so a hand-over is the software around the
 semaphores (HANDOVER) plus two semaphore trips (arrival, then buffer free) over
 the longest shift path.
 
+Stencil: a step as measured on 1x1 (the neighbours are the tile itself) plus
+two hop latencies per hop to the farthest neighbour. All-reduce: per tree
+level up, software (calibrated on 2x2), the flits, the path latency and the
+add loop; per level down the same without the add.
+
   model/perf_model.py memcpy --report build/reports/memcpy.json
   model/perf_model.py run-memcpy --host build/tb/soc/host_memcpy_4x4 \\
       --elf build/sw/memcpy.elf --shift=1,1 --seed=1      # run, then check
   model/perf_model.py run-cannon --host build/tb/soc/host_cannon_4x4 \\
       --cal-host build/tb/soc/host_cannon_1x1 --elf build/sw/cannon.elf --n 64
   model/perf_model.py planes --build build             # one plane against two
+  model/perf_model.py run-kernel --kernel stencil --host build/tb/soc/host_stencil_4x4 \\
+      --cal-host build/tb/soc/host_stencil_1x1 --elf build/sw/stencil.elf
 """
 import argparse
 import json
@@ -183,6 +190,9 @@ def predict_memcpy(rep):
         for hop in g.path(t, partner[t], forced):
             flows[hop] += 1
     add_launch_exit(tr, tiles)
+    if rep.get("go"):
+        for t in tiles:
+            tr.add(g.io, t, 1)    # the host's go write, once every tile runs
     worst, max_share = 0, 1
     for t in tiles:
         p = partner[t]
@@ -305,6 +315,111 @@ def check_cannon(rep, cal, tolerance):
     return ok
 
 
+# ------------------------------------------------------------------ stencil
+def predict_stencil(rep, cal):
+    """Per step: the edges (b/4 flits and a semaphore to each of the four
+    neighbours), and the time of a step on the 1x1 calibration (where the
+    neighbours are the tile itself) plus two hop latencies per hop to the
+    farthest neighbour (its halo, then the semaphore behind it)."""
+    g = Grid(rep["nx"], rep["ny"])
+    if cal["b"] != rep["b"] or cal["nx"] != 1 or cal["steps"] != rep["steps"]:
+        raise SystemExit("the stencil calibration must be a 1x1 run with the same b and steps")
+    forced = FORCED[rep["plane"]]
+    tiles = [(t["x"], t["y"]) for t in rep["tiles"]]
+    tr = Traffic(g)
+    flits = rep["b"] // 4
+    far = 0
+    for t in tiles:
+        for d in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            nb = g.neighbor(t, *d)
+            tr.add(t, nb, rep["steps"] * (flits + 1), forced)
+            far = max(far, g.hops(t, nb, forced))
+    add_launch_exit(tr, tiles)
+    step = cal["kernel_cycles"] / cal["steps"]
+    return tr, round(rep["steps"] * (step + 2 * HOP * far))
+
+
+# ------------------------------------------------------------------ reduce
+# All-reduce: software around one tree level (DMA programming, dma_wait,
+# sem_inc, the receiver's sem_wait) and the add loop per 32-bit word,
+# calibrated on a 2x2 run (one level in each dimension)
+def reduce_levels(n):
+    lv, d = [], 1
+    while d < n:
+        lv.append(d)
+        d *= 2
+    return lv
+
+
+def predict_reduce_traffic(rep):
+    g = Grid(rep["nx"], rep["ny"])
+    forced = FORCED[rep["plane"]]
+    flits = rep["len"] // 16 + 1
+    tr = Traffic(g)
+    for dim, size in ((0, g.nx), (1, g.ny)):
+        for d in reduce_levels(size):
+            for t in ((x, y) for y in range(g.ny) for x in range(g.nx)):
+                if dim == 1 and t[0] != 0:
+                    continue
+                if t[dim] % (2 * d) == d:
+                    to = g.neighbor(t, -d, 0) if dim == 0 else g.neighbor(t, 0, -d)
+                    tr.add(t, to, flits, forced)      # partial sum up the tree
+                    tr.add(to, t, flits, forced)      # the total back down
+    add_launch_exit(tr, [(t["x"], t["y"]) for t in rep["tiles"]])
+    return tr
+
+
+def reduce_root(rep):
+    t = next(t for t in rep["tiles"] if t["x"] == 0 and t["y"] == 0)
+    adds = len(reduce_levels(rep["nx"])) + len(reduce_levels(rep["ny"]))
+    return t, adds
+
+
+def calibrate_reduce(cal):
+    """(add cycles per word, software per level) from a 2x2 run."""
+    if (cal["nx"], cal["ny"]) != (2, 2):
+        raise SystemExit("the reduce calibration must be a 2x2 run")
+    root, adds = reduce_root(cal)
+    words = cal["len"] // 4
+    add = root["t"][1] / (adds * words)
+    flits = cal["len"] // 16 + 1
+    # two levels up (each with an add) and two down, one hop each
+    ovh = (cal["kernel_cycles"] - adds * words * add - 4 * (flits + ENDS + HOP)) / 4
+    return add, ovh
+
+
+def predict_reduce(rep, cal):
+    g = Grid(rep["nx"], rep["ny"])
+    forced = FORCED[rep["plane"]]
+    tr = predict_reduce_traffic(rep)
+    add, ovh = calibrate_reduce(cal)
+    words, flits = rep["len"] // 4, rep["len"] // 16 + 1
+    t = 0.0
+    for dim, size in ((0, g.nx), (1, g.ny)):
+        for d in reduce_levels(size):
+            to = (d, 0) if dim == 0 else (0, d)
+            hops = g.hops(to, (0, 0), forced)
+            t += 2 * (ovh + flits + ENDS + HOP * hops) + words * add    # up with the add, and down
+    return tr, round(t)
+
+
+def check_kernel(rep, cal, tolerance):
+    """Stencil or reduce: exact counters, kernel time within the tolerance."""
+    kind = rep["kernel"]
+    tr, kernel = predict_stencil(rep, cal) if kind == "stencil" else predict_reduce(rep, cal)
+    ok = check_counters(rep, tr)
+    meas = rep["kernel_cycles"]
+    err = (kernel - meas) / meas
+    pp = tr.per_plane()
+    print(f"{kind} {rep['nx']}x{rep['ny']}, plane {rep['plane']}: kernel {meas} cycles, model {kernel} ({err:+.1%}); "
+          f"{sum(tr.links.values())} router-output flits (NoC0 {pp[0]}, NoC1 {pp[1]}), "
+          f"per-link counts {'exact' if ok else 'MISMATCH'}")
+    if abs(err) > tolerance:
+        print(f"kernel time outside the {tolerance:.0%} tolerance")
+        ok = False
+    return ok
+
+
 # ------------------------------------------------------------------ runs
 def run_host(cmd, report):
     print("$", " ".join(cmd), flush=True)
@@ -334,6 +449,17 @@ def run_cannon(host, cal_host, elf, n, plane, rest, d):
     if rep is None:
         return None, None
     cal = run_host([cal_host, elf, f"--n={rep['b']}"] + rest, os.path.join(d, f"cannon_cal_{rep['b']}.json"))
+    return rep, cal
+
+
+def run_kernel(args, rest, d):
+    """A stencil or reduce run on the grid, and its calibration run."""
+    opts = {"stencil": [f"--b={args.b}", f"--steps={args.steps}"], "reduce": [f"--len={args.len}"]}[args.kernel]
+    rep = run_host([args.host, args.elf, f"--plane={args.plane}"] + opts + rest,
+                   os.path.join(d, f"{args.kernel}_{args.plane}.json"))
+    if rep is None:
+        return None, None
+    cal = run_host([args.cal_host, args.elf] + opts + rest, os.path.join(d, f"{args.kernel}_cal.json"))
     return rep, cal
 
 
@@ -403,6 +529,21 @@ def main():
     e.add_argument("--plane", default="auto", choices=FORCED)
     e.add_argument("--tolerance", type=float, default=0.15)
     e.add_argument("--report-dir", default=REPORTS)
+    k = sub.add_parser("kernel", help="check a stencil or reduce report against its calibration")
+    k.add_argument("--report", required=True)
+    k.add_argument("--calibration", required=True)
+    k.add_argument("--tolerance", type=float, default=0.15)
+    r = sub.add_parser("run-kernel", help="run host_stencil or host_reduce and its calibration, then check")
+    r.add_argument("--kernel", required=True, choices=("stencil", "reduce"))
+    r.add_argument("--host", required=True)
+    r.add_argument("--cal-host", required=True, help="stencil: the 1x1 host; reduce: the 2x2 host")
+    r.add_argument("--elf", required=True)
+    r.add_argument("--b", default="16")
+    r.add_argument("--steps", default="8")
+    r.add_argument("--len", default="1024")
+    r.add_argument("--plane", default="auto", choices=FORCED)
+    r.add_argument("--tolerance", type=float, default=0.15)
+    r.add_argument("--report-dir", default=REPORTS)
     f = sub.add_parser("planes", help="memcpy and Cannon on one plane and on two (4x4)")
     f.add_argument("--build", default=os.path.join(ROOT, "build"))
     f.add_argument("--shifts", nargs="*", default=["1,1", "-1,-1", "1,-1", "2,2"])
@@ -417,7 +558,17 @@ def main():
                                  args.tolerance) else 1
     if args.cmd == "planes":
         return planes(args, rest)
+    if args.cmd == "kernel":
+        return 0 if check_kernel(json.load(open(args.report)), json.load(open(args.calibration)),
+                                 args.tolerance) else 1
     with tempfile.TemporaryDirectory() as d:
+        if args.cmd == "run-kernel":
+            rep, cal = run_kernel(args, rest, d)
+            if rep is None or cal is None:
+                return 1
+            keep(rep, f"{args.kernel}_{rep['nx']}x{rep['ny']}_{args.plane}.json", args.report_dir)
+            keep(cal, f"{args.kernel}_cal_{cal['nx']}x{cal['ny']}.json", args.report_dir)
+            return 0 if check_kernel(rep, cal, args.tolerance) else 1
         if args.cmd == "run-memcpy":
             rep = run_memcpy(args.host, args.elf, args.shift, args.len, args.plane, rest, d)
             if rep is None:

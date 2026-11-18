@@ -90,7 +90,11 @@ int main(int argc, char** argv) {
       return blk;
     };
 
+    // Load time: every image written and landed (the writes are posted)
+    uint64_t t_load = sim.cycles();
     Program prog = dev.load_kernel(args.positional[0], grid);
+    dev.sync();
+    const uint64_t load_cycles = sim.cycles() - t_load;
     std::vector<unsigned> selects = args.flag("events") ? parse_list(args.opt("events")) : kModelSelects;
     dev.select_counters(grid, selects);
     if (!args.flag("no-cosim"))
@@ -156,8 +160,9 @@ int main(int argc, char** argv) {
     compute /= tiles * p;
     sync /= tiles * p;
     printf("cannon %ux%u, N=%u (b=%u), plane %s: kernel %u cycles, compute %.0f + sync %.0f cycles per step "
-           "(mean), run %llu cycles\n",
-           p, p, n, b, plane_name.c_str(), last - first, compute, sync, (unsigned long long)run);
+           "(mean), run %llu cycles, program load %llu cycles\n",
+           p, p, n, b, plane_name.c_str(), last - first, compute, sync, (unsigned long long)run,
+           (unsigned long long)load_cycles);
     if (args.flag("events"))
       for (Xy t : grid) {
         printf("tile %u,%u events", t.x, t.y);
@@ -176,8 +181,10 @@ int main(int argc, char** argv) {
       if (!f) throw std::runtime_error("cannot write " + args.opt("report"));
       fprintf(f, "{\n  \"kernel\": \"cannon\", \"nx\": %u, \"ny\": %u, \"n\": %u, \"b\": %u, \"plane\": \"%s\",\n", p,
               p, n, b, plane_name.c_str());
-      fprintf(f, "  \"kernel_cycles\": %u, \"run_cycles\": %llu, \"seed\": %llu,\n  \"events\": [", last - first,
-              (unsigned long long)run, (unsigned long long)args.seed);
+      fprintf(f, "  \"kernel_cycles\": %u, \"run_cycles\": %llu, \"load_cycles\": %llu, \"seed\": %llu,\n"
+              "  \"events\": [",
+              last - first, (unsigned long long)run, (unsigned long long)load_cycles,
+              (unsigned long long)args.seed);
       for (size_t k = 0; k < selects.size(); k++) fprintf(f, "%s%u", k ? ", " : "", selects[k]);
       fprintf(f, "],\n  \"tiles\": [\n");
       for (Xy t : grid) {

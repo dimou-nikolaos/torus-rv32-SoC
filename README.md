@@ -7,7 +7,9 @@ milestones and verification plan are in [SPEC.md](SPEC.md).
 Status: M3 done: both NoC planes (NoC0 east/south, NoC1 west/north) with an I/O row, every
 flit on the plane with fewer hops; programs are loaded and launched from C++ (libtorus) through
 the I/O tile's AXI port; memcpy and Cannon GEMM on 4x4 checked against the performance model.
-Next: M4 (scale to 8x8), then place and route (M5), FPGA (M6), compute engine (M7).
+M4 (8x8) in progress: memcpy, Cannon, stencil and all-reduce run bit-exact on 8x8 (multithreaded
+model), the performance model simulates the network flit by flit (cycle-exact against the RTL).
+Next: place and route (M5), FPGA (M6), compute engine (M7).
 
 ## Topology
 
@@ -89,9 +91,18 @@ tools/dev.sh model/perf_model.py run-cannon --host build/tb/soc/host_cannon_4x4 
     --cal-host build/tb/soc/host_cannon_1x1 --elf build/sw/cannon.elf --n 64
 tools/dev.sh model/perf_model.py planes      # one plane against two: build/reports/planes.md
 
+# Stencil (calibrated on 1x1) and all-reduce (calibrated on 2x2), any grid incl. 8x8
+tools/dev.sh model/perf_model.py run-kernel --kernel stencil --host build/tb/soc/host_stencil_8x8 \
+    --cal-host build/tb/soc/host_stencil_1x1 --elf build/sw/stencil.elf
+tools/dev.sh model/perf_model.py run-kernel --kernel reduce --host build/tb/soc/host_reduce_4x4 \
+    --cal-host build/tb/soc/host_reduce_2x2 --elf build/sw/reduce.elf --len 1024
+
+# Performance model v1: the network flit by flit, checked cycle-exact against the RTL
+tools/dev.sh model/noc_sim.py check-rtl --tb build/tb/unit/tb_noc_4x5_p01_s0_io --shift=2,2
+
 # Regression: replay a run or one test from the printed seeds
 tools/dev.sh scripts/regress.py --seed 1234
-tools/dev.sh scripts/regress.py --long --no-build     # adds Cannon N=128 and the plane comparison
+tools/dev.sh scripts/regress.py --long --no-build     # adds the 8x8 kernel suite, Cannon N=128, planes
 tools/dev.sh scripts/regress.py -k isa --no-build
 tools/dev.sh build/tb/unit/tb_spm --seed=42
 
