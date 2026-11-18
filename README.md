@@ -4,10 +4,10 @@ A 2D torus of RV32IM tiles (CV32E40X) with scratchpads, DMA and a credit-based
 two-plane NoC, simulated in Verilator and synthesized in Yosys. The design,
 milestones and verification plan are in [SPEC.md](SPEC.md).
 
-Status: M3 done: both NoC planes (NoC0 east/south, NoC1 west/north) with an I/O row, every
+Status: M4 done. M3: both NoC planes (NoC0 east/south, NoC1 west/north) with an I/O row, every
 flit on the plane with fewer hops; programs are loaded and launched from C++ (libtorus) through
 the I/O tile's AXI port; memcpy and Cannon GEMM on 4x4 checked against the performance model.
-M4 (8x8) in progress: memcpy, Cannon, stencil and all-reduce run bit-exact on 8x8 (multithreaded
+M4 (8x8) done: memcpy, Cannon, stencil and all-reduce run bit-exact on 8x8 (multithreaded
 model), the performance model simulates the network flit by flit (cycle-exact against the RTL).
 Next: place and route (M5), FPGA (M6), compute engine (M7).
 
