@@ -5,6 +5,7 @@
   scripts/regress.py --seed 1234     # replay a whole run
   scripts/regress.py -k isa          # only tests whose name contains "isa"
   scripts/regress.py --synth         # also run the Yosys area report
+  scripts/regress.py --long          # also the long runs (Cannon N=128, one plane against two)
 
 Every random test gets a seed derived from the run seed and its name; both are
 printed, and a failing test prints the exact command that replays it. Results
@@ -99,6 +100,22 @@ def discover(args):
         tests.append(Test(f"soc{grid}.memcpy_s{tag}", [
             sys.executable, "model/perf_model.py", "run-memcpy", "--host", str(BUILD / f"tb/soc/host_memcpy_{grid}"),
             "--elf", str(BUILD / "sw/memcpy.elf"), f"--shift={shift}"], timeout=1200))
+    # Forced plane: every copy the long way round on NoC1
+    tests.append(Test("soc4x4.memcpy_s1_1_noc1", [
+        sys.executable, "model/perf_model.py", "run-memcpy", "--host", str(BUILD / "tb/soc/host_memcpy_4x4"),
+        "--elf", str(BUILD / "sw/memcpy.elf"), "--shift=1,1", "--plane=noc1"], timeout=1200))
+    # M3 exit test: Cannon GEMM, bit-exact, against the model calibrated on 1x1
+    cannon = [sys.executable, "model/perf_model.py", "run-cannon", "--elf", str(BUILD / "sw/cannon.elf"),
+              "--cal-host", str(BUILD / "tb/soc/host_cannon_1x1")]
+    tests.append(Test("soc4x4.cannon_n64", cannon + ["--host", str(BUILD / "tb/soc/host_cannon_4x4"), "--n", "64"],
+                      timeout=1800))
+    tests.append(Test("soc2x2.cannon_n32_noc1", cannon + ["--host", str(BUILD / "tb/soc/host_cannon_2x2"),
+                                                          "--n", "32", "--plane", "noc1"], timeout=1800))
+    if args.long:
+        tests.append(Test("long.soc4x4.cannon_n128", cannon + ["--host", str(BUILD / "tb/soc/host_cannon_4x4"),
+                                                                "--n", "128"], timeout=7200))
+        tests.append(Test("long.planes", [sys.executable, "model/perf_model.py", "planes", "--build", str(BUILD)],
+                          timeout=7200))
     for elf in sorted((BUILD / "sw/isa").glob("*.elf")):
         tests.append(Test(f"isa.{elf.stem}", [tb, str(elf)]))
     if args.synth:
@@ -152,6 +169,7 @@ def main():
     ap.add_argument("-j", type=int, default=os.cpu_count(), help="parallel tests")
     ap.add_argument("--spm-seeds", type=int, default=4, help="scratchpad unit test seeds")
     ap.add_argument("--synth", action="store_true", help="include the Yosys area report")
+    ap.add_argument("--long", action="store_true", help="include the long runs")
     ap.add_argument("--no-build", action="store_true", help="skip the CMake build step")
     args = ap.parse_args()
 

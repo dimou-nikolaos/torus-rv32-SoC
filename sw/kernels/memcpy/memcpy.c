@@ -18,11 +18,13 @@ struct args {
   uint32_t senders;   // tiles sending to this one
   uint32_t sem;       // arrival semaphore, same address on every tile, zero at launch
   uint32_t result;    // where to record t_start, t_injected, t_arrived (low words)
+  uint32_t plane;     // NIU_PLANE_* for the copy and its semaphore
 };
 
 int kernel_main(const args_t *a) {
   xy_t partner = {(uint8_t)(a->partner & 0xff), (uint8_t)(a->partner >> 8)};
   volatile uint32_t *res = (volatile uint32_t *)a->result;
+  noc_set_plane(a->plane);
   uint32_t t0 = (uint32_t)tile_cycles();
   dma_write(0, a->src, partner, a->dst, a->len);
   dma_wait(0);

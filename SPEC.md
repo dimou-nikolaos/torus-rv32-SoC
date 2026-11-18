@@ -553,8 +553,8 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 - [x] Automatic plane selection in the DMA (fixed per source and destination) → measured hop counts match the prediction, per (src, dst) ordering holds (NIU, I/O bridge and reply engine use `noc_pkg::select_plane`; the NIU test checks every flit's plane, forced planes included; memcpy per-link counts exact with shifts that run on NoC0, NoC1 and both)
 - [x] NoC model updated for torus and two planes → RTL matches (noc_tlm.h `select_plane`, model/perf_model.py)
 - [x] `neighbor()` in `tile.h` → wraparound over the compute grid passes, I/O row skipped (nocops on 1x1, 2x2, 4x4: every offset up to one grid beyond each way, plus a data-then-semaphore swap with all four neighbors, which on 4x4 runs on both planes and across the I/O row)
-- [ ] Cannon GEMM, scalar, 4x4 → bit-exact
-- [ ] Cannon counters vs the performance model → within 15%
+- [x] Cannon GEMM, scalar, 4x4 → bit-exact (sw/kernels/cannon, tb/soc/host_cannon.cpp: int32 modulo 2^32, host-side skew, block shifts double-buffered under the compute; N=64 in the regression, N=128 with `regress.py --long`; also 2x2 with every flit forced onto NoC1)
+- [x] Cannon counters vs the performance model → within 15% (N=64: kernel 164825 cycles, model 164454, −0.2%; block multiply 40990 cycles against 40959 calibrated on 1x1; per-link and per-plane NIU counts exact)
 - [ ] Same kernels on one plane and on two planes → comparison table recorded
 
 ### M4: scale to 8x8
@@ -605,4 +605,4 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 
 - [x] Confirm CV32E40X builds in Verilator and Yosys with the chosen frontend (M0): yes, yosys-slang, no sv2v
 - [x] Fix flit width and coordinate width: 204-bit flit, 4-bit coordinates, router grid up to 16x16 including the I/O row and buffer columns
-- [ ] Pick the first GEMM size and block size so it fits 60 KB per tile with double buffering
+- [x] Pick the first GEMM size and block size so it fits 60 KB per tile with double buffering: int32, N=64 on 4x4 (16x16 blocks, 5 KB per tile with A and B double-buffered) in the regression, N=128 (32x32 blocks, 20 KB) as the long run; blocks of up to 4 KB at 0x8000..0xCFFF

@@ -6,7 +6,10 @@
 // (model/perf_model.py).
 //
 //   host_memcpy <memcpy.elf> [--len=BYTES] [--shift=DX,DY] [--report=FILE]
-//               [--events=E0,..,E7] [SimHost options: --seed, --cycles, --trace, --no-cosim, ...]
+//               [--plane=auto|noc0|noc1] [--events=E0,..,E7]
+//               [SimHost options: --seed, --cycles, --trace, --no-cosim, ...]
+// --plane forces the copies and their semaphores onto one plane (a one-plane
+// NoC for comparisons).
 // --events selects other counter events (tile_pkg.sv perf_event_e) than the
 // ones the model checks, for investigations; they are printed per tile.
 #include <algorithm>
@@ -32,7 +35,7 @@ const std::vector<unsigned> kModelSelects = {kEvNiuTx0, kEvNiuTx1, kEvNiuRx0, kE
                                         kEvR1Flit + kPortY};
 
 struct Args {
-  uint32_t src, dst, len, partner, senders, sem, result;
+  uint32_t src, dst, len, partner, senders, sem, result, plane;
 };
 
 }  // namespace
@@ -48,6 +51,12 @@ int main(int argc, char** argv) {
   int sx = std::stoi(shift.substr(0, shift.find(','))), sy = std::stoi(shift.substr(shift.find(',') + 1));
   if (len % 16 || len == 0 || len > kDst - kSrc) {
     fprintf(stderr, "--len must be a multiple of 16 up to %u\n", kDst - kSrc);
+    return 2;
+  }
+  const std::string plane_name = args.opt("plane", "auto");
+  const uint32_t plane = plane_name == "noc0" ? 1 : plane_name == "noc1" ? 2 : 0;
+  if (plane == 0 && plane_name != "auto") {
+    fprintf(stderr, "--plane must be auto, noc0 or noc1\n");
     return 2;
   }
   std::mt19937_64 rng(args.seed);
@@ -89,7 +98,7 @@ int main(int argc, char** argv) {
       dev.write(t, kSem, zero, 16);
       dev.write(t, kResult, zero, 16);
       Xy p = partner(t);
-      Args a{kSrc, kDst, len, p.x | p.y << 8, senders[index(t)], kSem, kResult};
+      Args a{kSrc, kDst, len, p.x | p.y << 8, senders[index(t)], kSem, kResult, plane};
       dev.set_args(prog, t, &a, sizeof a);
     }
     uint64_t t0 = sim.cycles();
@@ -136,9 +145,9 @@ int main(int argc, char** argv) {
           printf(" %u:%llu", selects[k], (unsigned long long)counters[index(t)][2 + k]);
         printf("\n");
       }
-    printf("memcpy %ux%u, %u bytes per tile, shift (%d,%d): copy phase %u cycles (%.2f bytes/cycle per tile), "
-           "run %llu cycles\n",
-           nx, ny, len, sx, sy, copy, (double)len / copy, (unsigned long long)run);
+    printf("memcpy %ux%u, %u bytes per tile, shift (%d,%d), plane %s: copy phase %u cycles (%.2f bytes/cycle per "
+           "tile), run %llu cycles\n",
+           nx, ny, len, sx, sy, plane_name.c_str(), copy, (double)len / copy, (unsigned long long)run);
     for (unsigned i = 0; i < n; i++)
       if (sim.tile((int)i).cosim)
         printf("lockstep tile %u,%u: %llu instructions, %s\n", i % nx, i / nx,
@@ -148,8 +157,8 @@ int main(int argc, char** argv) {
     if (args.flag("report")) {
       FILE* f = fopen(args.opt("report").c_str(), "w");
       if (!f) throw std::runtime_error("cannot write " + args.opt("report"));
-      fprintf(f, "{\n  \"kernel\": \"memcpy\", \"nx\": %u, \"ny\": %u, \"len\": %u, \"shift\": [%d, %d],\n", nx, ny,
-              len, sx, sy);
+      fprintf(f, "{\n  \"kernel\": \"memcpy\", \"nx\": %u, \"ny\": %u, \"len\": %u, \"shift\": [%d, %d], \"plane\": \"%s\",\n",
+              nx, ny, len, sx, sy, plane_name.c_str());
       fprintf(f, "  \"copy_cycles\": %u, \"run_cycles\": %llu, \"seed\": %llu,\n  \"events\": [", copy,
               (unsigned long long)run, (unsigned long long)args.seed);
       for (size_t k = 0; k < selects.size(); k++) fprintf(f, "%s%u", k ? ", " : "", selects[k]);

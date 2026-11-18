@@ -1,6 +1,6 @@
 # The SoC model per grid size (a library: the simulator host, Spike lockstep,
 # libtorus), and the programs that drive it: tb_soc runs ELFs on every tile,
-# host_memcpy is the M2 exit test.
+# host_memcpy is the M2 exit test, host_cannon the M3 one.
 foreach(grid "1;1" "2;2" "4;4")
   list(GET grid 0 nx)
   list(GET grid 1 ny)
@@ -18,7 +18,9 @@ foreach(grid "1;1" "2;2" "4;4")
   add_executable(tb_soc_${nx}x${ny} ${CMAKE_CURRENT_SOURCE_DIR}/tb_soc.cpp)
   target_link_libraries(tb_soc_${nx}x${ny} PRIVATE ${lib})
   set_target_properties(tb_soc_${nx}x${ny} PROPERTIES BUILD_RPATH ${SPIKE_PREFIX}/lib)
-  add_executable(host_memcpy_${nx}x${ny} ${CMAKE_CURRENT_SOURCE_DIR}/host_memcpy.cpp)
-  target_link_libraries(host_memcpy_${nx}x${ny} PRIVATE ${lib})
-  set_target_properties(host_memcpy_${nx}x${ny} PROPERTIES BUILD_RPATH ${SPIKE_PREFIX}/lib)
+  foreach(host host_memcpy host_cannon)
+    add_executable(${host}_${nx}x${ny} ${CMAKE_CURRENT_SOURCE_DIR}/${host}.cpp)
+    target_link_libraries(${host}_${nx}x${ny} PRIVATE ${lib})
+    set_target_properties(${host}_${nx}x${ny} PROPERTIES BUILD_RPATH ${SPIKE_PREFIX}/lib)
+  endforeach()
 endforeach()
