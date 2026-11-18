@@ -113,6 +113,57 @@ Program Device::load_kernels(const std::vector<std::string>& elfs, const std::ve
   return p;
 }
 
+void Device::install_loader(const std::string& loader_elf, const std::vector<Xy>& tiles) {
+  loader_ = load_kernels(std::vector<std::string>(tiles.size(), loader_elf), tiles);
+  std::vector<uint8_t> zero(256 - kLoaderTableSent, 0);   // its counters, kept across loads
+  for (Xy t : tiles) write(t, kLoaderTable + kLoaderTableSent, zero.data(), zero.size());
+}
+
+Program Device::load_kernel_tree(const std::string& elf, const std::vector<Xy>& tiles) {
+  if (loader_.tiles != tiles || tiles != compute_grid())
+    throw std::runtime_error("load_kernel_tree: install the loader on the whole compute grid first");
+  Program p;
+  p.tiles = tiles;
+  p.images.assign(tiles.size(), load_elf(elf));
+  const ElfImage& img = p.images[0];
+  // The table: segments widened to 16-byte words, and the image's bytes 0..15
+  // (address 0 holds the jump stub while the loader runs)
+  struct {
+    uint32_t nseg, head[4], seg[12][2], pad[3];
+  } tab{};
+  static_assert(sizeof tab == kLoaderTableSent, "loader table layout (sw/kernels/loader)");
+  bool has_head = false;
+  for (auto& s : img.segments) {
+    uint32_t lo = s.addr & ~15u, hi = (uint32_t)(s.addr + s.bytes.size() + 15) & ~15u;
+    if (hi > kLoaderBase) throw std::runtime_error("load_kernel_tree: segment reaches the loader at 0xE000");
+    if (tab.nseg == 12) throw std::runtime_error("load_kernel_tree: more than 12 segments");
+    tab.seg[tab.nseg][0] = lo;
+    tab.seg[tab.nseg][1] = hi - lo;
+    tab.nseg++;
+    if (s.addr == 0 && s.bytes.size() >= 16) {
+      memcpy(tab.head, s.bytes.data(), 16);
+      has_head = true;
+    }
+  }
+  if (!has_head) throw std::runtime_error("load_kernel_tree: the image does not start at address 0");
+  Xy root = tiles[0];
+  for (auto& s : img.segments) write(root, s.addr, s.bytes.data(), s.bytes.size());
+  write(root, kLoaderTable, &tab, sizeof tab);
+  // Every tile boots into the loader: lui t0, 0xE; jalr x0, 0(t0); nop; nop
+  const uint32_t stub[4] = {0x0000E2B7u, 0x00028067u, 0x00000013u, 0x00000013u};
+  for (Xy t : tiles) write(t, 0, stub, sizeof stub);
+  // Run the loader: no counter clear and no settling wait after the stop
+  // writes, the kernel's own launch clears the counters; every later write to
+  // a tile follows its stop write on the same path
+  io_write32(kIoDone, 0);
+  for (size_t i = tiles.size(); i-- > 0;) write32(tiles[i], kTctrl + kTctrlCtrl, 1);
+  while (done_count() < tiles.size()) {
+  }
+  for (size_t i = tiles.size(); i-- > 0;) write32(tiles[i], kTctrl + kTctrlCtrl, 0);
+  t_.sync();
+  return p;
+}
+
 void Device::set_args(const Program&, Xy t, const void* args, size_t len) {
   if (len > kMailboxBytes) throw std::runtime_error("set_args: mailbox holds 240 bytes");
   write(t, kMailbox, args, len);

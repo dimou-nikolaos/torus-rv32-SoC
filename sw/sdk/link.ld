@@ -1,5 +1,6 @@
 /* Tile memory map (SPEC.md, Tile memory map and NIU registers).
- * 0x0000_0000 - 0x0000_EFFF  code, data, stack (boot at 0x0)
+ * 0x0000_0000 - 0x0000_DFFF  code, data, stack (boot at 0x0)
+ * 0x0000_E000 - 0x0000_EFFF  reserved: the resident loader (sw/kernels/loader)
  * 0x0000_F000 - 0x0000_FEFF  semaphores and kernel sync words
  * 0x0000_FF00 - 0x0000_FFFF  mailbox (runtime args from the host)
  */
@@ -8,7 +9,7 @@ ENTRY(_start)
 
 MEMORY
 {
-  SPM     (rwx) : ORIGIN = 0x00000000, LENGTH = 0xF000
+  SPM     (rwx) : ORIGIN = 0x00000000, LENGTH = 0xE000
   SYNC    (rw)  : ORIGIN = 0x0000F000, LENGTH = 0x0F00
   MAILBOX (rw)  : ORIGIN = 0x0000FF00, LENGTH = 0x0100
 }

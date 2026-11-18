@@ -100,6 +100,9 @@ tools/dev.sh model/perf_model.py run-kernel --kernel reduce --host build/tb/soc/
 # Performance model v1: the network flit by flit, checked cycle-exact against the RTL
 tools/dev.sh model/noc_sim.py check-rtl --tb build/tb/unit/tb_noc_4x5_p01_s0_io --shift=2,2
 
+# Kernel load through the resident loader's software tree (any host program)
+tools/dev.sh build/tb/soc/host_cannon_8x8 build/sw/cannon.elf --n=128 --load=tree
+
 # Regression: replay a run or one test from the printed seeds
 tools/dev.sh scripts/regress.py --seed 1234
 tools/dev.sh scripts/regress.py --long --no-build     # adds the 8x8 kernel suite, Cannon N=128, planes

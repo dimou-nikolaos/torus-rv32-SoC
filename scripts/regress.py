@@ -130,6 +130,13 @@ def discover(args):
     tests.append(Test("soc2x2.stencil_noc1", kernel("stencil", "2x2", "1x1", "--plane", "noc1", "--b", "8"),
                       timeout=1200))
     tests.append(Test("soc4x4.reduce", kernel("reduce", "4x4", "2x2"), timeout=1200))
+    # M4: kernel load by the resident loader's software tree, then the kernel
+    # runs bit-exact with exact counters (Spike lockstep checks the image)
+    tests.append(Test("soc4x4.memcpy_tree_load", [
+        sys.executable, "model/perf_model.py", "run-memcpy", "--host", str(BUILD / "tb/soc/host_memcpy_4x4"),
+        "--elf", str(BUILD / "sw/memcpy.elf"), "--shift=1,1", "--load=tree"], timeout=1200))
+    tests.append(Test("soc2x2.cannon_tree_load", [str(BUILD / "tb/soc/host_cannon_2x2"), str(BUILD / "sw/cannon.elf"),
+                                                  "--n=32", "--load=tree"], timeout=1200))
     if args.long:
         # M4 exit: the kernel suite at 8x8 (multithreaded model)
         for shift in ("1,1", "2,2"):

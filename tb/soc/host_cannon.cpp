@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "host_load.h"
 #include "sim_host.h"
 #include "tb_args.h"
 #include "torus.h"
@@ -90,11 +91,9 @@ int main(int argc, char** argv) {
       return blk;
     };
 
-    // Load time: every image written and landed (the writes are posted)
-    uint64_t t_load = sim.cycles();
-    Program prog = dev.load_kernel(args.positional[0], grid);
-    dev.sync();
-    const uint64_t load_cycles = sim.cycles() - t_load;
+    // Load time: every image written and landed (--load=host or tree)
+    uint64_t load_cycles = 0;
+    Program prog = host_load(dev, sim, args, args.positional[0], grid, &load_cycles);
     std::vector<unsigned> selects = args.flag("events") ? parse_list(args.opt("events")) : kModelSelects;
     dev.select_counters(grid, selects);
     if (!args.flag("no-cosim"))
@@ -181,10 +180,10 @@ int main(int argc, char** argv) {
       if (!f) throw std::runtime_error("cannot write " + args.opt("report"));
       fprintf(f, "{\n  \"kernel\": \"cannon\", \"nx\": %u, \"ny\": %u, \"n\": %u, \"b\": %u, \"plane\": \"%s\",\n", p,
               p, n, b, plane_name.c_str());
-      fprintf(f, "  \"kernel_cycles\": %u, \"run_cycles\": %llu, \"load_cycles\": %llu, \"seed\": %llu,\n"
+      fprintf(f, "  \"kernel_cycles\": %u, \"run_cycles\": %llu, \"load_cycles\": %llu, \"load\": \"%s\", \"seed\": %llu,\n"
               "  \"events\": [",
               last - first, (unsigned long long)run, (unsigned long long)load_cycles,
-              (unsigned long long)args.seed);
+              args.opt("load", "host").c_str(), (unsigned long long)args.seed);
       for (size_t k = 0; k < selects.size(); k++) fprintf(f, "%s%u", k ? ", " : "", selects[k]);
       fprintf(f, "],\n  \"tiles\": [\n");
       for (Xy t : grid) {

@@ -44,6 +44,8 @@ uint32_t global_addr(Xy t, uint32_t local);
 
 // Memory map constants shared with the tile SDK (sw/sdk/tile.h)
 constexpr uint32_t kMailbox = 0xFF00, kMailboxBytes = 0xF0, kExitWord = 0xFFFC;
+// The resident loader's region and its image table (sw/kernels/loader)
+constexpr uint32_t kLoaderBase = 0xE000, kLoaderTable = 0xEF00, kLoaderTableSent = 128;
 constexpr uint32_t kTctrl = 0x10001000, kPerf = 0x10002000, kIoRegs = 0x10004000;
 constexpr uint32_t kTctrlCoord = 0x00, kTctrlCtrl = 0x04, kTctrlGrid = 0x14;
 constexpr uint32_t kPerfSel = 0x400, kPerfSnap = 0x800, kPerfNum = 0xFF0, kPerfCmd = 0xFF4;
@@ -93,6 +95,13 @@ class Device {
   // every tile has exited.
   Program load_kernel(const std::string& elf, const std::vector<Xy>& tiles);
   Program load_kernels(const std::vector<std::string>& elfs, const std::vector<Xy>& tiles);
+  // Kernel load by a software tree (sw/kernels/loader): install_loader writes
+  // the resident loader to every tile once; load_kernel_tree then writes the
+  // image only to the first tile and lets the loader copy it on in a binomial
+  // tree (log2 N steps), then stops the cores again. tiles must be the whole
+  // compute grid in index order. Same result as load_kernel.
+  void install_loader(const std::string& loader_elf, const std::vector<Xy>& tiles);
+  Program load_kernel_tree(const std::string& elf, const std::vector<Xy>& tiles);
   void set_args(const Program& p, Xy t, const void* args, size_t len);
   void launch(const Program& p);
   bool wait(const Program& p, uint64_t max_polls = ~0ull);
@@ -115,6 +124,7 @@ class Device {
  private:
   Transport& t_;
   unsigned nx_ = 0, ny_ = 0, out_ = 0;
+  Program loader_;   // installed by install_loader
 };
 
 }  // namespace torus

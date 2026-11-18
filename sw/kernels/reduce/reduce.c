@@ -15,7 +15,7 @@
 
 struct args {
   uint32_t vec;      // the vector, len bytes; the sum at exit
-  uint32_t recv;     // receive buffers: recv + stride * (8 * dim + level)
+  uint32_t recv;     // receive buffers: recv + stride * (4 * dim + level), up to 16x16
   uint32_t stride;   // len rounded up to 16
   uint32_t len;      // bytes, multiple of 16
   uint32_t plane;    // NIU_PLANE_* for all of this program's traffic
@@ -59,7 +59,7 @@ int kernel_main(const args_t *a) {
     if (dim == 1 && me.x != 0) break;
     for (unsigned d = 1, lvl = 0; d < size[dim]; d *= 2, lvl++) {
       unsigned s = 8 * dim + lvl;
-      uint32_t buf = a->recv + a->stride * s;
+      uint32_t buf = a->recv + a->stride * (4 * dim + lvl);
       if (pos[dim] % (2 * d) == d) {
         send(dim ? neighbor(0, -(int)d) : neighbor(-(int)d, 0), a->vec, buf, a->len, s);
         break;

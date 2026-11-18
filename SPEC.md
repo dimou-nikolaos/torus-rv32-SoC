@@ -214,7 +214,8 @@ Every tile sees the same local map, and any remote agent addresses a tile as (x,
 
 | Range | Size | Contents |
 | --- | --- | --- |
-| `0x0000_0000`–`0x0000_EFFF` | 60 KB | Code, data, stack, circular buffers (boot at `0x0`) |
+| `0x0000_0000`–`0x0000_DFFF` | 56 KB | Code, data, stack, circular buffers (boot at `0x0`) |
+| `0x0000_E000`–`0x0000_EFFF` | 4 KB | Resident loader (M4): code, data and stack, its image table at `0xEF00` and counters kept across loads; programs leave it alone |
 | `0x0000_F000`–`0x0000_FEFF` | 3.75 KB | Semaphores and kernel-defined sync words |
 | `0x0000_FF00`–`0x0000_FFFF` | 256 B | Mailbox: runtime args written by the host (`0xFF00`–`0xFFEF`), exit word at `0xFFFC` (`0xE000_0000` + exit code, written by the exit sequence) |
 | `0x1000_0000`–`0x1000_00FF` | 256 B | NIU and DMA registers (local core only) |
@@ -576,7 +577,16 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 - [x] Performance model v1, flit-level router queues → matches the RTL on the contended memcpy patterns (3285 and 4174 cycles on 4x4) (model/noc_sim.py: every router cycle by cycle; against tb_noc's stream mode every flit's send and ejection cycle is identical, one and two planes, slice depths 0 to 2, six configurations in the regression. memcpy in the SoC at the measured start times: 3289 for 3285, 4175 for 4174, 1140 for 1143. Contended patterns are chaotic: moving each tile's start by up to 3 cycles moves the copy phase by up to 20% ((1,−1): 3606..4189; NoC0 (−1,−1): 5748..6973, measured 5779), so the model gives a range over 8 jittered runs and the check requires the measurement inside it)
 - [x] Head-of-line blocking options B and C in model v1 → gain per pattern and kernel recorded, decision in open decisions (see Open issues: B, C, deeper buffers, the critical bubble scheme and dateline VCs, alone and combined, on 4x4 and 8x8; decided 2026-11-18: no router change in M4)
 - [x] ~~Head-of-line fix in RTL if it pays (option C on the X input)~~ → does not pay across patterns: C loses 18% on (1,−1) at 8x8 and long paths stay 3x off the bound with every variant (see Open issues); no RTL change
-- [ ] Rectangle multicast op → kernel load time reduced, test passes
+- [x] ~~Rectangle multicast op~~ Kernel load by a software tree (decided 2026-11-18 instead of router multicast) → kernel load time reduced, test passes (sw/kernels/loader, resident at `0xE000`; `Device::install_loader` once, `load_kernel_tree` writes the image only to tile 0 and a 16-byte jump stub at `0x0` everywhere, the loader copies image and table on in a binomial tree, largest subtree first, and restores the image's first 16 bytes; children signal ready before a parent writes them; hosts take `--load=tree` and read every tile's image back afterwards. Program load in fabric cycles, host writes every tile / tree:
+
+  | Program | 4x4 | 8x8 |
+  | --- | --- | --- |
+  | memcpy | | 5241 / 3370 (1.6x) |
+  | reduce | | 9017 / 4290 (2.1x) |
+  | stencil | | 9209 / 4298 (2.1x) |
+  | Cannon (3.3 KB image) | 3353 / 3530 | 13433 / 5284 (2.5x) |
+
+  The tree costs a fixed part (the stub, run and stop writes, about 150 cycles at 4x4) plus about 660 cycles per level; host writes grow with the number of tiles, so the tree pays from 8x8 on and is about even at 4x4. The first version sent to the largest k first, which in this numbering is the smallest subtree: the tree ran nearly serially (4.7k cycles at 4x4))
 - [x] 2D stencil kernel → bit-exact (sw/kernels/stencil, tb/soc/host_stencil.cpp: five-point Jacobi on a periodic int32 grid, one b x b block per tile, halos double-buffered by step parity with one arrival semaphore per direction; model: a 1x1 step plus two hop latencies per hop to the farthest neighbour, 4x4 −0.0%, 8x8 −0.3%, per-link counts exact)
 - [x] Reduction kernel → bit-exact (sw/kernels/reduce, tb/soc/host_reduce.cpp: all-reduce of an int32 vector, binary trees along the rows, then column 0, then the sum back down; model calibrated on 2x2: 4x4 +0.9%, 8x8 +1.4%, per-link counts exact)
 - [x] Full kernel suite at 8x8 → all pass (`regress.py --long`: memcpy (1,1) and (2,2), Cannon N=128, stencil, reduce; bit-exact, per-link counts exact, Cannon −0.7%, stencil −0.3%, reduce +1.4%, memcpy (2,2) inside the model's range. The memcpy kernel now waits for a go word the host writes once every tile runs: at 8x8 the launch takes about 150 cycles and early copies reached tiles whose counters were not running yet)
@@ -590,7 +600,24 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
   | memcpy 16 KB, shift (1,1) | 1143 | 1273 | 90% (start skew of the go writes) |
   | memcpy 16 KB, shift (2,2) | 3285 | 5143 | contended: head-of-line blocking and starvation (Open issues) |
 - [x] Yosys area, generic and sky130 → report stored (`synth_area.py --liberty`: sky130_fd_sc_hd tt_025C_1v80 from the image's PDK, pinned open_pdks build via ciel; CI and `regress.py --synth` store both. Compute tile: 420k transistors of logic, 0.77 mm² of standard cells (routers 0.28, NIU 0.20, core 0.16, counter bank 0.06, scratchpad banks' logic 0.06); I/O tile 0.50 mm². SRAM is not mapped: the sky130 OpenRAM macro sky130_sram_2kbyte_1rw1r_32x512_8 is 683 x 417 µm, so a tile's 64 KB (32 macros) is about 9.1 mm², over 90% of a tile; an 8x8 grid about 640 mm². M5 replaces the estimate with placed macros)
-- [ ] Model calibration → error table per kernel
+- [x] Model calibration → error table per kernel (`regress.py` and `--long`; every row also has exact per-link and per-plane NIU flit counts):
+
+  | Kernel | Calibration | Grid | Measured | Model | Error |
+  | --- | --- | --- | --- | --- | --- |
+  | memcpy 16 KB, shift (1,1) | endpoints fitted on 2x2 and 4x4 | 4x4 | 1143 | 1140 (median of 8 jittered runs) | −0.3% |
+  | | | 8x8 | 1260 | 1259 | −0.1% |
+  | memcpy 16 KB, shift (2,2) | | 4x4 | 3285 | 3228 (3043..3295) | −1.7% |
+  | | | 8x8 | 5143 | 4966 (4705..5162) | −3.5% |
+  | memcpy 16 KB, shift (1,−1) | | 4x4 | 4174 | 3680 (3606..4189) | −11.8% (inside the range; chaotic) |
+  | Cannon b=16 | block multiply on 1x1 | 4x4, N=64 | 75572 | 75134 | −0.6% |
+  | | | 8x8, N=128 | 151548 | 150474 | −0.7% |
+  | Cannon b=32 | | 4x4, N=128 | 500291 | 499294 | −0.2% |
+  | Stencil b=16, 8 steps | a step on 1x1 | 4x4 | 50087 | 50078 | −0.0% |
+  | | | 8x8 | 50213 | 50078 | −0.3% |
+  | All-reduce 1 KB | software per level and add loop on 2x2 | 4x4 | 9284 | 9370 | +0.9% |
+  | | | 8x8 | 13880 | 14075 | +1.4% |
+
+  Compute-bound kernels are predicted within 1.5% from their 1x1 or 2x2 calibration. Contended copies are the hard case: the model reproduces the RTL at the measured start times (cycle-exact network), but a few cycles of launch skew move the result by up to 20%, so the check is the range.
 - [ ] Buffer columns decision → recorded in open decisions
 
 ### M5: place and route
@@ -634,7 +661,7 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 | Router port structure | One 3x3 router per plane, one combined router for both planes | Decided: one 3x3 router per plane; separate NIU TX paths for DMA writes and READ\_REQ replies | Done |
 | Router pipeline depth | 1, 2 or 3 stages per hop | Decided: 2 stages (buffer write, switch allocation and lookahead route computation; then switch traversal into the output register), routes computed one hop ahead | Done |
 | Torus deadlock avoidance | Dateline VCs, bubble flow control | Decided: bubble on top of credits. Both planes together, with the I/O row's stops in every Y ring, run 2M-cycle saturating soaks without deadlock, while single-plane builds without the bubble rule deadlock; the packet's `vc` bit stays reserved | Done |
-| Multicast encoding | Rectangle in the header, separate multicast flit | Open: decide with the M4 kernel-load measurements | M4 |
+| Multicast encoding | Rectangle in the header, separate multicast flit; I/O-tile replication; software tree | Decided (M4): software tree for kernel load (no RTL change); hardware multicast revisited if a workload needs data broadcast at run time | Done (M4) |
 | Buffer columns | None, two columns half an X ring apart; bigger, banked | To discuss (raised 2026-11-18: bigger and/or banked). Analysis below (Buffer columns). Leaning: decide with the M5 SRAM area and the M7 engine's bandwidth demand | M5/M7 |
 | Synthesis target | Generic Yosys cells, sky130 liberty | Leaning: generic for area trends, sky130 when timing matters | M4 |
 | Phase-2 engine | Zve32x, custom int8 matrix unit | Open: Zve32x for standard tooling, custom unit for performance per area; decided with the placed baseline of M5 | M7 |
