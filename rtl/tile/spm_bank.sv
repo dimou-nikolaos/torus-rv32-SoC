@@ -1,6 +1,9 @@
-// One scratchpad bank: ROWS x 128 bit, single port, byte enables, read data one
-// cycle after the access. Simulation builds export a DPI backdoor for the
-// testbench ELF loader and memory dumps.
+// One scratchpad bank: ROWS x 128 bit, single port, byte enables, read data in
+// the cycle after the access only: SRAM macros do not hold it, so simulation
+// builds invert it in every other cycle and a user that reads it late fails.
+// Simulation builds export a DPI backdoor for the testbench ELF loader and
+// memory dumps. With SPM_SKY130 defined the bank is built from sky130 SRAM
+// macros (spm_bank_sky130), without the backdoor.
 module spm_bank #(
   parameter int unsigned ROWS = tile_pkg::SPM_ROWS,
   localparam int unsigned AW  = $clog2(ROWS)
@@ -13,6 +16,9 @@ module spm_bank #(
   input  logic [127:0]  wdata_i,
   output logic [127:0]  rdata_o
 );
+`ifdef SPM_SKY130
+  spm_bank_sky130 #(.ROWS(ROWS)) u_macros (.*);
+`else
   logic [127:0] mem [ROWS];
 
   always_ff @(posedge clk_i) begin
@@ -24,6 +30,9 @@ module spm_bank #(
         rdata_o <= mem[row_i];
       end
     end
+`ifndef SYNTHESIS
+    if (!(en_i && !we_i)) rdata_o <= ~rdata_o;
+`endif
   end
 
 `ifndef SYNTHESIS
@@ -38,6 +47,7 @@ module spm_bank #(
   function int spm_bank_bd_read(input int row, input int lane);
     return mem[row[AW-1:0]][lane[1:0]*32 +: 32];
   endfunction
+`endif
 `endif
 
 endmodule

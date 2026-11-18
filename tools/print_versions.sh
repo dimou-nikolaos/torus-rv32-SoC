@@ -15,3 +15,5 @@ v spike       sh -c 'git -C "$(dirname "$0")/../third_party/spike" describe --al
 v cv32e40x    sh -c 'git -C "$(dirname "$0")/../rtl/core/cv32e40x" rev-parse --short HEAD 2>/dev/null || echo "submodule not checked out"' "$0"
 v ciel        ciel --version
 v sky130      sh -c 'ls "$PDK_ROOT/ciel/sky130/versions" 2>/dev/null | head -1 || echo "PDK missing"'
+v openroad    openroad -version
+v orfs        sh -c 'cat "${ORFS_FLOW:-/opt/torus/orfs/flow}/../COMMIT" 2>/dev/null || echo "ORFS missing"'

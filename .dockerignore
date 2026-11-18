@@ -1,3 +1,4 @@
 *
 !tools/versions.env
 !tools/install_pinned.sh
+!tools/build_openroad.sh

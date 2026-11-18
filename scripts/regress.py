@@ -43,8 +43,16 @@ def discover(args):
             "rtl/lint/vendor.vlt"]
     tests = [Test("lint.tile", lint + ["--top-module", "tile_top", "-f", "rtl/tile/tile_sim.f"],
                   seeded=False)]
+    # The tile with SRAM macro banks (place and route), on OpenRAM's macro model
+    sram_v = os.path.join(os.environ.get("PDK_ROOT", "/opt/torus/pdk"), "sky130A", "libs.ref",
+                          "sky130_sram_macros", "verilog", "sky130_sram_2kbyte_1rw1r_32x512_8.v")
+    tests.append(Test("lint.tile_sky130", lint + ["--top-module", "tile_top", "+define+SPM_SKY130",
+                                                  "-f", "rtl/tile/tile_sim.f", "rtl/tile/spm_bank_sky130.sv",
+                                                  sram_v], seeded=False))
     for i in range(args.spm_seeds):
         tests.append(Test(f"unit.spm.{i}", [str(BUILD / "tb/unit/tb_spm"), "--cycles=200000"]))
+    for i in range(2):   # banks built from sky130 SRAM macros (OpenRAM model)
+        tests.append(Test(f"unit.spm_sky130.{i}", [str(BUILD / "tb/unit/tb_spm_sky130"), "--cycles=200000"]))
     tests.append(Test("unit.flit", [str(BUILD / "tb/unit/tb_flit")]))
     for cfg in ("s0_d4", "s1_d6", "s2_d8", "s0_d3", "s2_d7"):
         tests.append(Test(f"unit.link.{cfg}", [str(BUILD / f"tb/unit/tb_link_{cfg}")]))

@@ -116,6 +116,11 @@ tools/dev.sh build/tb/unit/tb_spm --seed=42
 
 # Area report (Yosys generic cells, SRAM as macros)
 tools/dev.sh scripts/regress.py -k synth --synth --no-build
+
+# Place and route a compute tile in sky130hd (OpenROAD-flow-scripts, about an
+# hour): area, timing and power report in build/pnr/tile_<variant>_report.txt
+tools/dev.sh scripts/pnr.py tile --period 20
+tools/dev.sh scripts/pnr.py tile --period 15 --variant p15 --to floorplan
 ```
 
 Waveforms are FST files; open them on the host with Surfer or GTKWave.
@@ -128,7 +133,8 @@ Waveforms are FST files; open them on the host with Surfer or GTKWave.
 | `tb/` | Verilator testbenches: `unit` (block tests), `soc` (SoC host, tb_soc, host programs), `models` (C++ golden models, Spike lockstep, AXI model), `common` |
 | `sw/` | `sdk` (crt0, linker script, tile.h, exit sequence), `kernels`, `isa` (riscv-tests environment), `runtime` (libtorus host library) |
 | `model/` | `perf_model.py` (performance model) |
-| `scripts/` | `regress.py`, `synth_area.py`, `gen_fold_svg.py` (topology animation) |
+| `scripts/` | `regress.py`, `synth_area.py`, `pnr.py` (place and route), `plot_layout.py` (layout images), `gen_fold_svg.py` (topology animation) |
+| `pnr/` | Place-and-route designs (ORFS config, constraints, pin sides) and the shared power grid and source reading |
 | `tools/`, `docker/` | Pinned versions, image, native setup, `dev.sh` |
 | `third_party/` | Spike and riscv-tests submodules |
 

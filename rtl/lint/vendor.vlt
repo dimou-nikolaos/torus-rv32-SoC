@@ -8,5 +8,8 @@ lint_off -rule UNOPTFLAT   -file "*rtl/core/cv32e40x/*"
 lint_off -rule SYMRSVDWORD -file "*rtl/core/cv32e40x/*"
 lint_off -rule LATCHDLY    -file "*rtl/core/cv32e40x/*"
 
+// sky130 OpenRAM macro model (tb_spm_sky130), from the PDK.
+lint_off -file "*sky130_sram_macros/*"
+
 // Packages define constants that not every user references.
 lint_off -rule UNUSEDPARAM -file "*rtl/pkg/*"

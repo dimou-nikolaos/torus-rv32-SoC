@@ -30,6 +30,11 @@ TORUS_IMAGE=torus-tools:local tools/dev.sh scripts/regress.py --no-build --seed 
 - If a Verilator run fails (lint) and a later one changes how many C++ files it
   splits into, the link fails with undefined `___024root__*` symbols: delete
   that target's `V<top>.dir` under build/ and reconfigure.
+- Waveforms are compiled in only with `-DTORUS_TRACE=ON` (use a separate build
+  directory, e.g. build-trace); other builds reject `--trace=FILE`.
+- Place and route: `scripts/pnr.py tile --period <ns>` (ORFS in the image, runs in
+  build/pnr); `scripts/plot_layout.py` draws a DEF with tiles, banks and units
+  colored.
 - Spike builds once into build/spike-install (about 5 minutes) and is reused
   while the submodule commit is unchanged.
 
@@ -83,5 +88,10 @@ TORUS_IMAGE=torus-tools:local tools/dev.sh scripts/regress.py --no-build --seed 
 - The two RX paths retire independently: a testbench that predicts memory or
   reply order must keep each plane's writes apart (tb_niu gives each plane
   its own half of the written regions) and queue replies at READ_REQ retire.
+- Scratchpad read data is valid only in the cycle after the read (SRAM macros do
+  not hold it; simulation inverts it afterwards).
+- ORFS's slang read uses --keep-hierarchy, which rejects core_wrap's
+  hierarchical event taps: pnr/common/canonicalize.tcl reads the sources
+  instead (core_wrap elaborated flat on its own).
 - Revert a mutation with the inverse edit, never `git checkout <file>`: it
   also throws away the uncommitted work in that file.

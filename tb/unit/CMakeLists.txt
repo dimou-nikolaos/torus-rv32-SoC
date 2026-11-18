@@ -4,6 +4,20 @@ torus_verilated_tb(tb_spm
   SV    tb/unit/spm/tb_spm_top.sv
   CPP   ${CMAKE_CURRENT_SOURCE_DIR}/spm/tb_spm.cpp)
 
+# The same with each bank built from sky130 SRAM macros (place and route), run
+# on OpenRAM's behavioral model of the macro from the image's PDK.
+set(SKY130_SRAM_V
+    $ENV{PDK_ROOT}/sky130A/libs.ref/sky130_sram_macros/verilog/sky130_sram_2kbyte_1rw1r_32x512_8.v)
+if(NOT EXISTS ${SKY130_SRAM_V})
+  message(FATAL_ERROR "sky130 SRAM macro model not found: ${SKY130_SRAM_V} (PDK_ROOT from the tool image)")
+endif()
+torus_verilated_tb(tb_spm_sky130
+  TOP   tb_spm_top
+  FLISTS rtl/tile/spm.f
+  SV    tb/unit/spm/tb_spm_top.sv rtl/tile/spm_bank_sky130.sv
+  CPP   ${CMAKE_CURRENT_SOURCE_DIR}/spm/tb_spm.cpp
+  ARGS  +define+SPM_SKY130 ${SKY130_SRAM_V})
+
 # Credit link: full-depth buffers at slice depths 0..2, plus one shallow buffer
 # (DEPTH = RTT - 1) that must lose exactly the predicted throughput.
 foreach(cfg "0;4;0" "1;6;0" "2;8;0" "0;3;1" "2;7;1")

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Installs the pinned OSS CAD Suite, RISC-V GCC, Python venv and sky130 PDK into a prefix.
+# Installs the pinned OSS CAD Suite, RISC-V GCC, Python venv and sky130 PDK into a prefix
+# (OpenROAD and the ORFS flow come from tools/build_openroad.sh in another stage).
 # Used by docker/Dockerfile.
 #   usage: install_pinned.sh <versions.env> <prefix>
 set -euo pipefail
@@ -40,9 +41,10 @@ python3 -m venv "$prefix/venv"
     "pytest==${PY_PYTEST}" "pyelftools==${PY_PYELFTOOLS}" "numpy==${PY_NUMPY}" \
     "matplotlib==${PY_MATPLOTLIB}" "pyyaml==${PY_PYYAML}" "ciel==${PY_CIEL}"
 
-# sky130 PDK, standard cells only
+# sky130 PDK: standard cells and SRAM macros
 rm -rf "$prefix/pdk"
-"$prefix/venv/bin/ciel" enable --pdk-family sky130 --pdk-root "$prefix/pdk" -l sky130_fd_sc_hd \
+"$prefix/venv/bin/ciel" enable --pdk-family sky130 --pdk-root "$prefix/pdk" \
+    -l sky130_fd_sc_hd -l sky130_sram_macros \
     "$SKY130_OPEN_PDKS"
 
 # Environment script. The venv goes before OSS CAD Suite, which ships its own python3.
@@ -50,6 +52,7 @@ cat > "$prefix/env.sh" <<ENV
 export TORUS_TOOLS="$prefix"
 export PDK_ROOT="$prefix/pdk"
 export PDK=sky130A
-export PATH="$prefix/venv/bin:$prefix/riscv-gcc/bin:$prefix/oss-cad-suite/bin:\$PATH"
+export ORFS_FLOW="$prefix/orfs/flow"
+export PATH="$prefix/venv/bin:$prefix/riscv-gcc/bin:$prefix/oss-cad-suite/bin:$prefix/openroad/bin:\$PATH"
 ENV
 echo "Installed pinned tools into $prefix; source $prefix/env.sh"

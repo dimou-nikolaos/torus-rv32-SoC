@@ -27,11 +27,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push if missing
+        timeout-minutes: 330
         run: |
           image="${{ steps.tag.outputs.image }}"
           if docker manifest inspect "$image" >/dev/null 2>&1; then
             echo "image $image exists"
           else
+            # The OpenROAD stage (Bazel) needs room: drop preinstalled SDKs we never use
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+            df -h /
             source tools/versions.env
             docker build -f docker/Dockerfile --build-arg BASE_IMAGE="$BASE_IMAGE" -t "$image" .
             docker push "$image"

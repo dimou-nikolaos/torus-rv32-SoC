@@ -42,7 +42,7 @@ Tools come from OSS CAD Suite, pinned to one dated release, plus the few things 
 | Spike | Repo submodule, built by the project | Golden model per core | Linked as a library; scratchpad and MMIO sync through its memory callbacks (no patch needed so far), later custom instructions |
 | Python 3 + pytest | Image | Test driver and analysis | Regressions, plots, counter comparison |
 | CMake + Ninja | Image | Build | One target per testbench, one per kernel |
-| OpenROAD and sky130 PDK (M5) | Added to the image in M5 | Place and route | Tile and grid placement, logical against folded order |
+| OpenROAD, OpenROAD-flow-scripts, sky130 PDK | OpenROAD built from source with Bazel in an image stage at the commit the pinned ORFS uses; ORFS flow/ (sky130hd); sky130_fd_sc_hd and the OpenRAM sky130_sram_macros via ciel | Place and route (M5) | `scripts/pnr.py`; designs under `pnr/` |
 
 Setup:
 
@@ -624,7 +624,7 @@ Each microtask is small (about a day or two) and ends in something tangible: a t
 
 ### M5: place and route
 
-- [ ] OpenROAD and the sky130 PDK in the tool image → versions pinned, CI builds the image
+- [x] OpenROAD and the sky130 PDK in the tool image → versions pinned, CI builds the image (2026-11-18: ORFS pinned to the commit of an official daily image, 26Q4-507-g2ba1223c8, and OpenROAD to the commit it pins; the 26Q4 tag no longer builds, a Bazel dependency's GitHub archive changed checksum. OpenROAD is a command-line build, about 50 minutes in its own image stage. The PDK adds the OpenRAM macros. Scratchpad banks for place and route (`spm_bank_sky130`, under `SPM_SKY130`): eight sky130_sram_2kbyte_1rw1r_32x512_8 per bank, four lanes wide and two deep, checked by `tb_spm_sky130` on OpenRAM's own model. The macro drives read data after the falling edge and does not hold it, so `spm_bank` now promises read data in the cycle after a read only, and simulation builds invert it in every other cycle; the whole regression passes with that)
 - [ ] OpenROAD flow for one tile (scratchpad banks as macros) → placed and routed, area and timing report stored
 - [ ] Achievable fabric clock and link slices needed → recorded per slice depth
 - [ ] Grid floorplan in logical order (4x4 plus the I/O row) → longest wire and timing recorded
