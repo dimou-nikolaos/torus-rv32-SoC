@@ -2,8 +2,9 @@
 // the cycle after the access only: SRAM macros do not hold it, so simulation
 // builds invert it in every other cycle and a user that reads it late fails.
 // Simulation builds export a DPI backdoor for the testbench ELF loader and
-// memory dumps. With SPM_SKY130 defined the bank is built from sky130 SRAM
-// macros (spm_bank_sky130), without the backdoor.
+// memory dumps. With SPM_SKY130 or SPM_IHP defined the bank is built from
+// sky130 or IHP SG13G2 SRAM macros (spm_bank_sky130, spm_bank_ihp), without
+// the backdoor.
 module spm_bank #(
   parameter int unsigned ROWS = tile_pkg::SPM_ROWS,
   localparam int unsigned AW  = $clog2(ROWS)
@@ -18,6 +19,8 @@ module spm_bank #(
 );
 `ifdef SPM_SKY130
   spm_bank_sky130 #(.ROWS(ROWS)) u_macros (.*);
+`elsif SPM_IHP
+  spm_bank_ihp #(.ROWS(ROWS)) u_macros (.*);
 `else
   logic [127:0] mem [ROWS];
 

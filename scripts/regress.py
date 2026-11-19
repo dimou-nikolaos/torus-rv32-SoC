@@ -50,6 +50,15 @@ def discover(args):
         tests.append(Test(f"lint.tile_sky130_{kb}k", lint + [
             "--top-module", "tile_top", "+define+SPM_SKY130", f"+define+TORUS_SPM_KB={kb}",
             "-f", "rtl/tile/tile_sim.f", "rtl/tile/spm_bank_sky130.sv", sram_v], seeded=False))
+    # The tile with IHP SG13G2 SRAM macro banks (place and route), on the PDK's model
+    ihp_v = os.path.join(os.environ.get("PDK_ROOT", "/opt/torus/pdk"), "ihp-sg13g2", "libs.ref", "sg13g2_sram",
+                         "verilog")
+    for kb, rows in ((32, 512), (64, 1024)):
+        tests.append(Test(f"lint.tile_ihp_{kb}k", lint + [
+            "--timing", "--timescale", "1ns/10ps", "--top-module", "tile_top", "+define+SPM_IHP", "+define+FUNCTIONAL",
+            f"+define+TORUS_SPM_KB={kb}", "-f", "rtl/tile/tile_sim.f", "rtl/tile/spm_bank_ihp.sv",
+            os.path.join(ihp_v, f"RM_IHPSG13_1P_{rows}x64_c2_bm_bist.v"),
+            os.path.join(ihp_v, "RM_IHPSG13_1P_core_behavioral_bm_bist.v")], seeded=False))
     # Only 32 and 64 KB keep the software's memory map
     tests.append(Test("lint.tile_spm16_rejected", lint + ["--top-module", "tile_top", "+define+TORUS_SPM_KB=16",
                                                           "-f", "rtl/tile/tile_sim.f"],
@@ -60,6 +69,8 @@ def discover(args):
     for kb in (32, 64):   # banks built from sky130 SRAM macros (OpenRAM model): one macro row, two
         tests.append(Test(f"unit.spm_sky130_{kb}k", [str(BUILD / f"tb/unit/tb_spm_sky130_{kb}"),
                                                      "--cycles=200000"]))
+    for kb in (32, 64):   # banks built from IHP SG13G2 SRAM macros (PDK model): 512x64, 1024x64
+        tests.append(Test(f"unit.spm_ihp_{kb}k", [str(BUILD / f"tb/unit/tb_spm_ihp_{kb}"), "--cycles=200000"]))
     tests.append(Test("unit.flit", [str(BUILD / "tb/unit/tb_flit")]))
     for cfg in ("s0_d4", "s1_d6", "s2_d8", "s0_d3", "s2_d7"):
         tests.append(Test(f"unit.link.{cfg}", [str(BUILD / f"tb/unit/tb_link_{cfg}")]))

@@ -25,13 +25,15 @@ export PDN_TCL        = $(PNR_DIR)../common/pdn_sram.tcl
 # the DIE_AREA and CORE_AREA computed from cross.tcl)
 TILE_FLOORPLAN ?= auto
 ifeq ($(TILE_FLOORPLAN),cross)
+# cross.tcl, or its copy with scripts/pnr.py --geom overrides (macros.tcl, io_cross.tcl)
+export TILE_FLOORPLAN_TCL ?= $(PNR_DIR)cross.tcl
 export MACRO_PLACEMENT_TCL = $(PNR_DIR)macros.tcl
 export IO_CONSTRAINTS      = $(PNR_DIR)io_cross.tcl
 # 416 X-link pins per side in the 420 um arm: pins on adjacent met3 tracks
 export PLACE_PINS_ARGS     = -min_distance 1 -min_distance_in_tracks
 else
 export IO_CONSTRAINTS = $(PNR_DIR)io.tcl
-# 32 macros of 0.28 mm2 (9.1 mm2) and about 0.95 mm2 of standard cells
+# 16 macros of 0.28 mm2 (4.6 mm2; 32 at 64 KB) and about 0.95 mm2 of standard cells
 export CORE_UTILIZATION ?= 60
 endif
 export PLACE_DENSITY    ?= 0.55

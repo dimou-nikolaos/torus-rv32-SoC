@@ -1,7 +1,12 @@
 # Pin sides for the cross floorplan: the NoC pins of io.tcl at the ends of the
 # channel arms they enter (cross.tcl), the tile's own links in the first half
 # of each arm end (bottom, left), the feedthroughs in the second.
-source [file join [file dirname [info script]] cross.tcl]
+# cross.tcl, or its copy with pnr.py --geom overrides
+if {[info exists ::env(TILE_FLOORPLAN_TCL)]} {
+  source $::env(TILE_FLOORPLAN_TCL)
+} else {
+  source [file join [file dirname [info script]] cross.tcl]
+}
 set ym [expr {($chan_y0 + $chan_y1) / 2}]
 set xm [expr {($chan_x0 + $chan_x1) / 2}]
 set ::tile_regions [list \

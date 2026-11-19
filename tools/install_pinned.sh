@@ -46,6 +46,14 @@ rm -rf "$prefix/pdk"
 "$prefix/venv/bin/ciel" enable --pdk-family sky130 --pdk-root "$prefix/pdk" \
     -l sky130_fd_sc_hd -l sky130_sram_macros \
     "$SKY130_OPEN_PDKS"
+# IHP SG13G2: standard cells and SRAM macros, next to sky130A in the same root
+"$prefix/venv/bin/ciel" enable --pdk-family ihp-sg13g2 --pdk-root "$prefix/pdk" \
+    -l sg13g2_stdcell -l sg13g2_sram \
+    "$IHP_OPEN_PDK"
+# Only libs.ref is used (the ORFS platform brings the tech files): drop the
+# simulator and layout tool setups (about 800 MB) and the 5-metal variant
+ihp="$(readlink -f "$prefix/pdk/ihp-sg13g2")"
+rm -rf "$ihp/libs.tech" "$(readlink -f "$prefix/pdk/ihp-sg13cmos5l")" "$prefix/pdk/ihp-sg13cmos5l"
 
 # Environment script. The venv goes before OSS CAD Suite, which ships its own python3.
 cat > "$prefix/env.sh" <<ENV

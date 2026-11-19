@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the pinned OpenROAD and installs the pinned OpenROAD-flow-scripts flow
-# directory (sky130 platforms only) into a prefix. Used by docker/Dockerfile in
+# directory (sky130hd and ihp-sg13g2 platforms only) into a prefix. Used by docker/Dockerfile in
 # its own stage, whose result is copied into the tool image.
 #   usage: build_openroad.sh <versions.env> <prefix>
 set -euo pipefail
@@ -35,7 +35,7 @@ or_commit=$(git -C "$tmp/orfs" rev-parse HEAD:tools/OpenROAD)
 rm -rf "$prefix/orfs"
 mkdir -p "$prefix/orfs/flow/platforms"
 (cd "$tmp/orfs/flow" && cp -a Makefile scripts util "$prefix/orfs/flow/" \
-    && cp -a platforms/common platforms/sky130hd "$prefix/orfs/flow/platforms/")
+    && cp -a platforms/common platforms/sky130hd platforms/ihp-sg13g2 "$prefix/orfs/flow/platforms/")
 echo "$ORFS_COMMIT" > "$prefix/orfs/COMMIT"
 
 # OpenROAD, command line only (no GUI).

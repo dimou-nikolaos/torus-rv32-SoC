@@ -22,6 +22,25 @@ foreach(kb 32 64)
     ARGS  +define+SPM_SKY130 ${SKY130_SRAM_V})
 endforeach()
 
+# The same on IHP SG13G2 SRAM macros (two per bank: 512x64 at 32 KB, 1024x64 at
+# 64 KB), on the PDK's functional model.
+set(IHP_SRAM_DIR $ENV{PDK_ROOT}/ihp-sg13g2/libs.ref/sg13g2_sram/verilog)
+if(NOT EXISTS ${IHP_SRAM_DIR}/RM_IHPSG13_1P_core_behavioral_bm_bist.v)
+  message(FATAL_ERROR "IHP SRAM macro models not found in ${IHP_SRAM_DIR} (PDK_ROOT from the tool image)")
+endif()
+foreach(cfg "32;512" "64;1024")
+  list(GET cfg 0 kb)
+  list(GET cfg 1 rows)
+  torus_verilated_tb(tb_spm_ihp_${kb}
+    TOP   tb_spm_top
+    SPM_KB ${kb}
+    FLISTS rtl/tile/spm.f
+    SV    tb/unit/spm/tb_spm_top.sv rtl/tile/spm_bank_ihp.sv
+    CPP   ${CMAKE_CURRENT_SOURCE_DIR}/spm/tb_spm.cpp
+    ARGS  --timescale 1ns/10ps +define+SPM_IHP +define+FUNCTIONAL ${IHP_SRAM_DIR}/RM_IHPSG13_1P_${rows}x64_c2_bm_bist.v
+          ${IHP_SRAM_DIR}/RM_IHPSG13_1P_core_behavioral_bm_bist.v)
+endforeach()
+
 # Credit link: full-depth buffers at slice depths 0..2, plus one shallow buffer
 # (DEPTH = RTT - 1) that must lose exactly the predicted throughput.
 foreach(cfg "0;4;0" "1;6;0" "2;8;0" "0;3;1" "2;7;1")

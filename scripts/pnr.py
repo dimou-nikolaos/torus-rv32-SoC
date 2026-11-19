@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Place and route in sky130hd with OpenROAD-flow-scripts (M5).
+"""Place and route in sky130hd or IHP SG13G2 with OpenROAD-flow-scripts (M5).
 
 Runs the ORFS flow of the image ($ORFS_FLOW) on a design under pnr/<design>/
 (config.mk, sdc.tcl, io.tcl). The RTL file list is expanded here (ORFS takes
@@ -14,13 +14,14 @@ build/pnr/<design>_<variant>_report.{txt,json}: area, utilization, timing
   scripts/pnr.py tile --report-only               # collect reports again
   scripts/pnr.py tile --abstract --variant cross  # LEF and timing model for the grid
   scripts/pnr.py grid --order folded --tile-variant cross --period 20
+  scripts/pnr.py tile_ihp --period 20             # the tile in IHP SG13G2 (cross floorplan)
 
 The grid (soc_top, 4x4 plus the I/O row) uses a tile run's abstract as a hard
 macro; this script places the tiles in logical or folded order (the fold of
 scripts/gen_fold_svg.py) with routing channels between them and stops after
 global routing: timing comes from global-route parasitics.
 
-Each variant runs in build/pnr/{logs,objects,reports,results}/sky130hd/<design>/<variant>.
+Each variant runs in build/pnr/{logs,objects,reports,results}/<platform>/<design>/<variant>.
 """
 import argparse
 import json
@@ -35,13 +36,31 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORK = os.path.join(ROOT, "build", "pnr")
 STAGES = ["synth", "floorplan", "place", "cts", "grt", "route", "finish"]
 
-SRAM_LIB = "sky130A/libs.ref/sky130_sram_macros/lib/sky130_sram_2kbyte_1rw1r_32x512_8_TT_1p8V_25C.lib"
+FLOW = os.environ.get("ORFS_FLOW", "/opt/torus/orfs/flow")
+PDK = os.environ.get("PDK_ROOT", "/opt/torus/pdk")
+SKY130_SRAM = "sky130A/libs.ref/sky130_sram_macros/{}/sky130_sram_2kbyte_1rw1r_32x512_8{}"
+IHP_SRAM = "platforms/ihp-sg13g2/{}/RM_IHPSG13_1P_512x64_c2_bm_bist{}"
+# Per platform: the standard-cell liberty for synthesis, and the LEFs the
+# layout images need (cells and SRAM macros)
+PLATFORMS = {
+    "sky130hd": {"lib": os.path.join(FLOW, "platforms/sky130hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib"),
+                 "lefs": [os.path.join(FLOW, "platforms/sky130hd/lef/sky130_fd_sc_hd_merged.lef"),
+                          os.path.join(PDK, SKY130_SRAM.format("lef", ".lef"))]},
+    "ihp-sg13g2": {"lib": os.path.join(FLOW, "platforms/ihp-sg13g2/lib/sg13g2_stdcell_typ_1p20V_25C.lib"),
+                   "lefs": [os.path.join(FLOW, "platforms/ihp-sg13g2/lef/sg13g2_stdcell.lef"),
+                            os.path.join(FLOW, IHP_SRAM.format("lef", ".lef"))]},
+}
 
 DESIGNS = {
-    "tile": {"flist": "rtl/tile/tile_pnr.f", "top": "tile_top", "defines": ["SPM_SKY130"],
-             "params": {"NX": 4, "NY": 4}, "macro_libs": [SRAM_LIB],
+    "tile": {"platform": "sky130hd", "flist": "rtl/tile/tile_pnr.f", "top": "tile_top", "defines": ["SPM_SKY130"],
+             "params": {"NX": 4, "NY": 4},
+             "macro_libs": [os.path.join(PDK, SKY130_SRAM.format("lib", "_TT_1p8V_25C.lib"))],
              "flat": {"core_wrap": ["BOOT_ADDR", "MTVEC_ADDR", "SPM_BYTES"]}},
-    "grid": {"flist": "rtl/soc/soc_pnr.f", "top": "soc_top", "defines": [],
+    "tile_ihp": {"platform": "ihp-sg13g2", "flist": "rtl/tile/tile_pnr_ihp.f", "top": "tile_top",
+                 "defines": ["SPM_IHP"], "params": {"NX": 4, "NY": 4},
+                 "macro_libs": [os.path.join(FLOW, IHP_SRAM.format("lib", "_typ_1p20V_25C.lib"))],
+                 "flat": {"core_wrap": ["BOOT_ADDR", "MTVEC_ADDR", "SPM_BYTES"]}},
+    "grid": {"platform": "sky130hd", "flist": "rtl/soc/soc_pnr.f", "top": "soc_top", "defines": [],
              "params": {"NX": 4, "NY": 4}, "macro_libs": [],
              "blackbox": {"tile_top": ["STARVE_LIMIT", "NX", "NY", "LINK_SLICE", "IO_RD_OUTSTANDING"]}},
 }
@@ -176,13 +195,32 @@ def tcl_geometry(path):
     return v
 
 
-def floorplan_vars(design, floorplan):
+def floorplan_vars(design, floorplan, variant, geom):
+    """ORFS variables of a hand floorplan; geom (name=value) overrides its
+    `set` values in a copy under build/pnr/floorplan, which the floorplan's Tcl
+    sources instead (TILE_FLOORPLAN_TCL)."""
     if floorplan == "auto":
+        if geom:
+            raise SystemExit("--geom needs a hand floorplan")
         return []
-    g = tcl_geometry(os.path.join(ROOT, "pnr", design, f"{floorplan}.tcl"))
+    path = os.path.join(ROOT, "pnr", design, f"{floorplan}.tcl")
+    extra = []
+    if geom:
+        text = open(path).read()
+        for kv in geom:
+            k, v = kv.split("=", 1)
+            text, n = re.subn(rf"^set {k}(\s+)\S+", lambda m: f"set {k}{m.group(1)}{v}", text, flags=re.M)
+            if n != 1:
+                raise SystemExit(f"--geom {k}: no `set {k}` in {path}")
+        path = os.path.join(WORK, "floorplan", f"{design}_{floorplan}_{variant}.tcl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if not os.path.exists(path) or open(path).read() != text:   # a newer file reruns ORFS from here
+            open(path, "w").write(text)
+        extra.append(f"TILE_FLOORPLAN_TCL={path}")
+    g = tcl_geometry(path)
     m, w, h = g["margin"], g["die_w"], g["die_h"]
-    return [f"TILE_FLOORPLAN={floorplan}", f"DIE_AREA=0 0 {w:.2f} {h:.2f}",
-            f"CORE_AREA={m:.2f} {m:.2f} {w - m:.2f} {h - m:.2f}"]
+    return extra + [f"TILE_FLOORPLAN={floorplan}", f"DIE_AREA=0 0 {w:.2f} {h:.2f}",
+                    f"CORE_AREA={m:.2f} {m:.2f} {w - m:.2f} {h - m:.2f}"]
 
 
 def write_sdc(design, period, out):
@@ -206,11 +244,9 @@ def canonicalize(design, variant, files, incdirs):
         return 0
     for k in ("results", "logs"):
         os.makedirs(dirs[k], exist_ok=True)
-    flow = os.environ.get("ORFS_FLOW", "/opt/torus/orfs/flow")
-    pdk = os.environ.get("PDK_ROOT", "/opt/torus/pdk")
     env = dict(os.environ,
-               PNR_LIBS=os.path.join(flow, "platforms/sky130hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib"),
-               PNR_MACRO_LIBS=" ".join(os.path.join(pdk, m) for m in d["macro_libs"]),
+               PNR_LIBS=PLATFORMS[d["platform"]]["lib"],
+               PNR_MACRO_LIBS=" ".join(d["macro_libs"]),
                PNR_FILES=" ".join(files), PNR_INCDIRS=" ".join(incdirs),
                PNR_DEFINES=" ".join(d["defines"]), PNR_TOP=d["top"],
                PNR_PARAMS=" ".join(f"{k} {v}" for k, v in d["params"].items()),
@@ -253,7 +289,7 @@ def make(design, variant, target, period, extra, params=None):
 
 
 def stage_dirs(design, variant):
-    sub = os.path.join("sky130hd", design, variant)
+    sub = os.path.join(DESIGNS[design]["platform"], design, variant)
     return {k: os.path.join(WORK, k, sub) for k in ("logs", "reports", "results", "objects")}
 
 
@@ -318,7 +354,8 @@ def collect(design, variant, period):
 def fmt(rep):
     def n(v, f="{:.0f}"):
         return "n/a" if v is None else f.format(v)
-    lines = [f"PnR report: {rep['design']} ({rep['variant']}), sky130hd, stage {rep['stage']}", "",
+    lines = [f"PnR report: {rep['design']} ({rep['variant']}), {DESIGNS[rep['design']]['platform']}, "
+             f"stage {rep['stage']}", "",
              f"  die area           {n(rep['die_um2'] and rep['die_um2'] / 1e6, '{:.2f}')} mm2 "
              f"(core {n(rep['core_um2'] and rep['core_um2'] / 1e6, '{:.2f}')} mm2)",
              f"  macros             {n(rep['macros'])}, {n(rep['macro_um2'] and rep['macro_um2'] / 1e6, '{:.2f}')} mm2",
@@ -382,10 +419,7 @@ def render(design, variant, rep, title):
     if subprocess.run(["openroad", "-exit", "-no_init", tcl], env=dict(os.environ, ODB=odb, DEF=df),
                       stdout=subprocess.DEVNULL).returncode:
         return None
-    flow = os.environ.get("ORFS_FLOW", "/opt/torus/orfs/flow")
-    pdk = os.environ.get("PDK_ROOT", "/opt/torus/pdk")
-    lefs = [os.path.join(flow, "platforms/sky130hd/lef/sky130_fd_sc_hd_merged.lef"),
-            os.path.join(pdk, "sky130A/libs.ref/sky130_sram_macros/lef/sky130_sram_2kbyte_1rw1r_32x512_8.lef")]
+    lefs = list(PLATFORMS[DESIGNS[design]["platform"]]["lefs"])
     if design == "grid":
         lefs.append(tile_abstract(rep.get("tile_variant", "cross"))[0])
     png = os.path.join(WORK, f"{design}_{variant}.png")
@@ -407,6 +441,8 @@ def main():
     ap.add_argument("--floorplan", default="auto", help="auto (macro placer) or a pnr/<design>/<name>.tcl")
     ap.add_argument("--report-only", action="store_true")
     ap.add_argument("--set", nargs="*", default=[], metavar="VAR=VALUE", help="extra ORFS variables")
+    ap.add_argument("--geom", nargs="*", default=[], metavar="NAME=VALUE",
+                    help="override a hand floorplan's geometry (e.g. chan_v=800 for cross)")
     ap.add_argument("--abstract", action="store_true", help="tile: write the LEF and timing abstract of a finished run")
     grid = ap.add_argument_group("grid")
     grid.add_argument("--order", choices=["logical", "folded"], default="logical")
@@ -432,7 +468,9 @@ def main():
         params = {"LINK_SLICE": args.slice,
                   "FT_ORDER": 0 if args.no_ft else {"logical": 1, "folded": 2}[args.order]}
     else:
-        extra = floorplan_vars(args.design, args.floorplan) + extra
+        if args.design == "tile_ihp" and args.floorplan == "auto":
+            args.floorplan = "cross"   # its only floorplan
+        extra = floorplan_vars(args.design, args.floorplan, args.variant, args.geom) + extra
 
     t0 = time.time()
     rc = 0
@@ -456,7 +494,7 @@ def main():
                    feedthroughs=not args.no_ft)
     out = os.path.join(WORK, f"{args.design}_{args.variant}_report")
     json.dump(rep, open(out + ".json", "w"), indent=1)
-    title = (f"{args.design} ({args.variant}), sky130hd, {rep['stage']}, {args.period} ns"
+    title = (f"{args.design} ({args.variant}), {DESIGNS[args.design]['platform']}, {rep['stage']}, {args.period} ns"
              + (f", {args.order} order" if args.design == "grid" else ""))
     if args.design == "grid":
         rep["link_timing"] = link_timing(args.variant, args.tile_variant)

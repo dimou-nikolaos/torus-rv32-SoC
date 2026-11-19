@@ -172,7 +172,7 @@ def read_def(path):
 
 def classify(name, master, rules):
     for label, rx in rules:
-        if label.startswith("SRAM") and not master.startswith("sky130_sram"):
+        if label.startswith("SRAM") and not master.startswith(("sky130_sram", "RM_IHPSG13")):
             continue
         m = re.search(rx, name)
         if m:
