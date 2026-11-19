@@ -51,6 +51,14 @@ SKIP_MASTERS = re.compile(r"(tapvpwrvgnd|fill|decap|PHY_|TAP_)", re.I)
 # is the upper half of the two-plane port): one line per link in the overlay
 LINK_PINS = {"x_out_o[413]": ("NoC0 east", "#1f77b4"), "y_out_o[413]": ("NoC0 south", "#2ca02c"),
              "x_out_o[206]": ("NoC1 west", "#d62728"), "y_out_o[206]": ("NoC1 north", "#9467bd")}
+# The same links at their sink: a tile's input valid bit. Links from the I/O row
+# (standard cells, no tile output pin) are traced back from here.
+LINK_IN_PINS = {"x_in_i[413]": LINK_PINS["x_out_o[413]"], "y_in_i[413]": LINK_PINS["y_out_o[413]"],
+                "x_in_i[206]": LINK_PINS["x_out_o[206]"], "y_in_i[206]": LINK_PINS["y_out_o[206]"]}
+# Repeater cells (input A, output X) in sky130hd and IHP SG13G2
+BUF_RE = re.compile(r"(__|sg13g2_)(buf|clkbuf|dlygate|dlymetal|dlyb)")
+# Output pins of standard cells (a net's driver)
+OUT_PINS = {"X", "Y", "Q", "Q_N", "HI", "LO", "L_HI", "L_LO"}
 
 
 def lef_pins(paths, macro):
@@ -121,7 +129,7 @@ def link_lines(def_text, comps, sizes, pins, macro):
                 a1 = acc + abs(p1[0] - p0[0]) + abs(p1[1] - p0[1])
                 out.append((*p0, *p1, label, color, chain, a1))
                 master = where[i][0]
-                if re.search(r"__(buf|clkbuf|dlygate|dlymetal)", master) and (i, "X") in net_of:
+                if BUF_RE.search(master) and (i, "X") in net_of:
                     todo.append((net_of[(i, "X")], p1, a1))
                 ft = re.match(r"([xy]ft)_i(\[\d+\])$", pn)
                 if master == macro and ft and (i, f"{ft.group(1)}_o{ft.group(2)}") in net_of:
@@ -131,6 +139,53 @@ def link_lines(def_text, comps, sizes, pins, macro):
                     a2 = a1 + abs(p2[0] - p1[0]) + abs(p2[1] - p1[1])
                     out.append((*p1, *p2, label, color, chain, a2))
                     todo.append((net_of[q], p2, a2))
+
+    # Links from the I/O row into a tile: from the tile's input pin back
+    # through repeaters and feedthroughs to the driver; links that start at a
+    # tile output are drawn above already
+    def driver(n, skip):
+        for i, pn in nets[n]:
+            if (i, pn) == skip or i not in where:
+                continue
+            m = where[i][0]
+            if m == macro and re.match(r"([xy]ft_o|[xy]_out_o)\[", pn) or m != macro and pn in OUT_PINS:
+                return i, pn
+        return None
+
+    for (inst, pin), n in net_of.items():
+        if pin not in LINK_IN_PINS or inst not in where or where[inst][0] != macro:
+            continue
+        label, color = LINK_IN_PINS[pin]
+        path, cur, ok = [(inst, pin)], (inst, pin), True
+        while True:
+            d = driver(net_of[cur], cur)
+            if d is None:
+                ok = False
+                break
+            path.append(d)
+            i, pn = d
+            m = where[i][0]
+            if m == macro and pn.startswith(("x_out_o", "y_out_o")):
+                ok = False   # from a tile: drawn from its output
+                break
+            ft = re.match(r"([xy]ft)_o(\[\d+\])$", pn)
+            if m == macro and ft:
+                cur = (i, f"{ft.group(1)}_i{ft.group(2)}")
+            elif BUF_RE.search(m) and (i, "A") in net_of:
+                cur = (i, "A")
+            else:
+                break   # the I/O row router's output
+            path.append(cur)
+            if cur not in net_of:
+                ok = False
+                break
+        if not ok:
+            continue
+        pts = [point(*c) for c in reversed(path)]
+        chain, acc = f"{path[-1][0]}/{path[-1][1]}", 0.0
+        for p0, p1 in zip(pts, pts[1:]):
+            acc += abs(p1[0] - p0[0]) + abs(p1[1] - p0[1])
+            out.append((*p0, *p1, label, color, chain, acc))
     return out
 
 

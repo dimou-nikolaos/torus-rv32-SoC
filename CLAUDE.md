@@ -98,5 +98,12 @@ TORUS_IMAGE=torus-tools:local tools/dev.sh scripts/regress.py --no-build --seed 
   width (tb/models/spm_model.h kSpmAw), not at 16 bits.
 - crt0 loads the mailbox address without relaxation: the loader's gp lands
   near the mailbox and ld relaxes `la` to a gp offset it cannot encode.
+- PnR in IHP SG13G2: macros, fences and the core origin must sit on the site
+  grid (0.48 x 3.78 um; detailed placement fails "site aligned" otherwise), and
+  the grid's I/O row is not fenced (repeaters on long links join the driver's
+  fence and pile up on its edge). Its cells are about twice sky130's.
+- A pnr.py run restarts from synthesis whenever any listed RTL source is newer
+  than its canonicalized RTLIL: avoid touching RTL while a long run is wanted.
+- Grid runs (pnr.py grid*) skip antenna repair: at 32 KB it ran out of memory.
 - Revert a mutation with the inverse edit, never `git checkout <file>`: it
   also throws away the uncommitted work in that file.

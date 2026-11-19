@@ -22,3 +22,7 @@ export GLOBAL_ROUTE_ARGS = -congestion_iterations 10 -allow_congestion -verbose
 # leaves): placement and CTS have repaired the design already, and the study
 # measures the global-route wires as they are.
 export SKIP_INCREMENTAL_REPAIR = 1
+# Antenna repair after global routing (jumpers, diodes) is for signoff, not for
+# this study, and it ran out of memory on the 32 KB sky130 grid (19 GB at its
+# legalization)
+export SKIP_ANTENNA_REPAIR = 1

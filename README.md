@@ -121,18 +121,20 @@ tools/dev.sh build/tb/unit/tb_spm_32 --seed=42
 # Area report (Yosys generic cells, SRAM as macros)
 tools/dev.sh scripts/regress.py -k synth --synth --no-build
 
-# Place and route a compute tile in sky130hd (OpenROAD-flow-scripts, about an
-# hour): area, timing and power report in build/pnr/tile_<variant>_report.txt
-tools/dev.sh scripts/pnr.py tile --period 20 --floorplan cross
-tools/dev.sh scripts/pnr.py tile --period 15 --variant p15 --to floorplan
+# Place and route a compute tile (OpenROAD-flow-scripts): area, timing and
+# power report in build/pnr/<design>_<variant>_report.txt, layout image next to
+# it. tile is sky130hd (closes global routing only), tile_ihp IHP SG13G2
+# (routes clean, about 6 hours); --geom overrides the floorplan's sizes.
+tools/dev.sh scripts/pnr.py tile_ihp --period 20 --variant wide --geom chan_v=1200 chan_h=1300
+tools/dev.sh scripts/pnr.py tile --period 20 --floorplan cross --variant spm32_big --geom chan_v=900 chan_h=1100 --to grt
 
-# The 4x4 grid with the tile as a hard macro, in logical or folded order (links
-# through the tiles' feedthroughs), to global routing: link lengths and timing
-# in build/pnr/grid_<order>_s0_report.txt, layout with links in the .png.
-# One grid run at a time: they need up to 22 GB.
-tools/dev.sh scripts/pnr.py tile --period 20 --variant ft --floorplan cross --to cts
-tools/dev.sh scripts/pnr.py tile --variant ft --floorplan cross --abstract --set ABSTRACT_SOURCE=4_1_cts
-tools/dev.sh scripts/pnr.py grid --order folded
+# The 4x4 grid with the tile's abstract as a hard macro, in logical or folded
+# order (links through the tiles' feedthroughs), to global routing: link
+# lengths and timing in the report, layout with links in the .png. grid is
+# sky130, grid_ihp IHP. One grid run at a time: they need up to 22 GB.
+tools/dev.sh scripts/pnr.py tile_ihp --variant wide --geom chan_v=1200 chan_h=1300 --abstract --set ABSTRACT_SOURCE=5_1_grt
+tools/dev.sh scripts/pnr.py grid_ihp --order folded --tile-variant wide --variant folded_wide --io-band 1600
+tools/dev.sh scripts/pnr.py grid --order folded --tile-variant spm32_big --variant folded_spm32
 ```
 
 Waveforms are FST files; open them on the host with Surfer or GTKWave.

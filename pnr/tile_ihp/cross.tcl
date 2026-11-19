@@ -13,8 +13,8 @@ set margin 30.24   ;# die edge to core: a multiple of the site (0.48 x 3.78)
 set inset  25.0    ;# core edge to macros
 set macro_rows 2   ;# per bank (32 KB)
 set gap_y  60.0    ;# between the macro rows of a bank: the outer macro's pin escape
-set chan_v 700.0   ;# vertical arm of the cross (Y links)
-set chan_h 800.0   ;# horizontal arm (X links)
+set chan_v 1200.0  ;# vertical arm of the cross (Y links); 700/800 placed at 84% utilization, too dense
+set chan_h 1300.0  ;# horizontal arm (X links)
 
 set bank_w $sram_w
 set bank_h [expr {$macro_rows * $sram_h + ($macro_rows - 1) * $gap_y}]

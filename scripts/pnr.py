@@ -15,6 +15,7 @@ build/pnr/<design>_<variant>_report.{txt,json}: area, utilization, timing
   scripts/pnr.py tile --abstract --variant cross  # LEF and timing model for the grid
   scripts/pnr.py grid --order folded --tile-variant cross --period 20
   scripts/pnr.py tile_ihp --period 20             # the tile in IHP SG13G2 (cross floorplan)
+  scripts/pnr.py grid_ihp --order folded --tile-variant wide   # the grid of IHP tiles
 
 The grid (soc_top, 4x4 plus the I/O row) uses a tile run's abstract as a hard
 macro; this script places the tiles in logical or folded order (the fold of
@@ -44,9 +45,18 @@ IHP_SRAM = "platforms/ihp-sg13g2/{}/RM_IHPSG13_1P_512x64_c2_bm_bist{}"
 # layout images need (cells and SRAM macros)
 PLATFORMS = {
     "sky130hd": {"lib": os.path.join(FLOW, "platforms/sky130hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib"),
+                 "setrc": os.path.join(FLOW, "platforms/sky130hd/setRC.tcl"),
                  "lefs": [os.path.join(FLOW, "platforms/sky130hd/lef/sky130_fd_sc_hd_merged.lef"),
                           os.path.join(PDK, SKY130_SRAM.format("lef", ".lef"))]},
     "ihp-sg13g2": {"lib": os.path.join(FLOW, "platforms/ihp-sg13g2/lib/sg13g2_stdcell_typ_1p20V_25C.lib"),
+                   "setrc": os.path.join(FLOW, "platforms/ihp-sg13g2/setRC.tcl"),
+                   # Grid: the core origin and every macro and fence on the
+                   # site grid (legalization rejects cells off it)
+                   "site": (0.48, 3.78), "core_margin": 30.24,
+                   # No I/O row fences: the repeaters placement adds on the long
+                   # links join their driver's fence (exclusive or suggested),
+                   # pile up on its edge and legalization fails
+                   "fence": None,
                    "lefs": [os.path.join(FLOW, "platforms/ihp-sg13g2/lef/sg13g2_stdcell.lef"),
                             os.path.join(FLOW, IHP_SRAM.format("lef", ".lef"))]},
 }
@@ -60,20 +70,29 @@ DESIGNS = {
                  "defines": ["SPM_IHP"], "params": {"NX": 4, "NY": 4},
                  "macro_libs": [os.path.join(FLOW, IHP_SRAM.format("lib", "_typ_1p20V_25C.lib"))],
                  "flat": {"core_wrap": ["BOOT_ADDR", "MTVEC_ADDR", "SPM_BYTES"]}},
-    "grid": {"platform": "sky130hd", "flist": "rtl/soc/soc_pnr.f", "top": "soc_top", "defines": [],
-             "params": {"NX": 4, "NY": 4}, "macro_libs": [],
+    # Grids of a tile design's abstract (scripts/pnr.py <tile> --abstract)
+    "grid": {"platform": "sky130hd", "tile": "tile", "flist": "rtl/soc/soc_pnr.f", "top": "soc_top",
+             "defines": [], "params": {"NX": 4, "NY": 4}, "macro_libs": [],
              "blackbox": {"tile_top": ["STARVE_LIMIT", "NX", "NY", "LINK_SLICE", "IO_RD_OUTSTANDING"]}},
+    "grid_ihp": {"platform": "ihp-sg13g2", "tile": "tile_ihp", "flist": "rtl/soc/soc_pnr.f", "top": "soc_top",
+                 "defines": [], "params": {"NX": 4, "NY": 4}, "macro_libs": [],
+                 "blackbox": {"tile_top": ["STARVE_LIMIT", "NX", "NY", "LINK_SLICE", "IO_RD_OUTSTANDING"]}},
 }
 NX, NY = 4, 4
 
 
-def tile_abstract(variant):
-    """LEF and liberty of a tile run (scripts/pnr.py tile --abstract)."""
-    res = os.path.join(WORK, "results", "sky130hd", "tile", variant)
+def is_grid(design):
+    return "tile" in DESIGNS[design]
+
+
+def tile_abstract(grid, variant):
+    """LEF and liberty of the grid's tile run (scripts/pnr.py <tile> --abstract)."""
+    tile = DESIGNS[grid]["tile"]
+    res = stage_dirs(tile, variant)["results"]
     lef, lib = os.path.join(res, "tile_top.lef"), os.path.join(res, "tile_top_typ.lib")
     for f in (lef, lib):
         if not os.path.exists(f):
-            raise SystemExit(f"{f} missing: run scripts/pnr.py tile --variant {variant} --abstract first")
+            raise SystemExit(f"{f} missing: run scripts/pnr.py {tile} --variant {variant} --abstract first")
     return lef, lib
 
 
@@ -88,7 +107,7 @@ def lef_size(lef, macro):
     raise SystemExit(f"{lef}: no SIZE for {macro}")
 
 
-def grid_floorplan(order, channel, io_band, lef, out):
+def grid_floorplan(order, channel, io_band, lef, out, site=None, margin=10.0, fence="EXCLUSIVE"):
     """Writes the tile placement for the grid; returns the die (w, h).
 
     Physical columns run left to right, rows top to bottom (NoC0 runs east and
@@ -101,6 +120,12 @@ def grid_floorplan(order, channel, io_band, lef, out):
     sys.path.insert(0, os.path.join(ROOT, "scripts"))
     from gen_fold_svg import Ring
     tw, th = lef_size(lef, "tile_top")
+
+    def snap(v, axis):   # onto the site grid from the core origin
+        if site is None:
+            return v
+        return margin + round((v - margin) / site[axis]) * site[axis]
+
     gy = NY + 1
     if order == "logical":
         col = {x: x for x in range(NX)}
@@ -121,8 +146,8 @@ def grid_floorplan(order, channel, io_band, lef, out):
              "array set tile_pos {"]
     for y in range(NY):
         for x in range(NX):
-            px = channel + col[x] * (tw + channel)
-            py = top_of[row[y]] - th
+            px = snap(channel + col[x] * (tw + channel), 0)
+            py = snap(top_of[row[y]] - th, 1)
             # Mirrored only in folded order (as soc_top FT_ORDER 2 assumes)
             my = order == "folded" and col[(x + 1) % NX] < col[x]
             mx = order == "folded" and row[(y + 1) % gy] < row[y]
@@ -143,12 +168,12 @@ def grid_floorplan(order, channel, io_band, lef, out):
     # where the floorplan puts that row, so its wires are measured in place.
     band_top = top_of[row[NY]]
     lines += ["set block [ord::get_db_block]", "proc um {v} { return [ord::microns_to_dbu $v] }"]
-    for x in range(NX):
-        x0 = col[x] * (tw + channel) + channel / 2
+    for x in range(NX if fence else 0):
+        x0 = snap(col[x] * (tw + channel) + channel / 2, 0)
+        x1, y0, y1 = snap(x0 + tw + channel, 0), snap(band_top - io_band, 1), snap(band_top, 1)
         lines += [f"set r [odb::dbRegion_create $block io_row_{x}]",
-                  f"odb::dbBox_create $r [um {x0:.2f}] [um {band_top - io_band:.2f}] "
-                  f"[um {x0 + tw + channel:.2f}] [um {band_top:.2f}]",
-                  "$r setRegionType EXCLUSIVE",
+                  f"odb::dbBox_create $r [um {x0:.2f}] [um {y0:.2f}] [um {x1:.2f}] [um {y1:.2f}]",
+                  f"$r setRegionType {fence}",
                   f"set g [odb::dbGroup_create $r io_row_{x}]",
                   "set n 0",
                   "foreach inst [$block getInsts] {",
@@ -378,18 +403,20 @@ def fmt(rep):
     return "\n".join(lines) + "\n"
 
 
-def link_timing(variant, tile_variant):
+def link_timing(design, variant, tile_variant):
     """Worst link path per class (pnr/grid/linkpaths.tcl) on the last stage
     reached: global-route parasitics after routing, placement estimates before."""
-    res = stage_dirs("grid", variant)["results"]
+    res = stage_dirs(design, variant)["results"]
     for stem, par in (("5_1_grt", "global_routing"), ("4_1_cts", "placement"), ("3_place", "placement"),
                       ("3_4_place_resized", "placement")):
         if os.path.exists(os.path.join(res, stem + ".odb")):
             break
     else:
         return None
-    out = os.path.join(WORK, f"grid_{variant}_links.txt")
-    env = dict(os.environ, TILE_LIB=tile_abstract(tile_variant)[1], ODB=os.path.join(res, stem + ".odb"),
+    out = os.path.join(WORK, f"{design}_{variant}_links.txt")
+    plat = PLATFORMS[DESIGNS[design]["platform"]]
+    env = dict(os.environ, TILE_LIB=tile_abstract(design, tile_variant)[1], ODB=os.path.join(res, stem + ".odb"),
+               STD_LIB=plat["lib"], SETRC=plat["setrc"],
                SDC=os.path.join(res, stem + ".sdc"), OUT=out, PARASITICS=par,
                GUIDES=os.path.join(res, "route.guide"))
     if subprocess.run(["openroad", "-exit", "-no_init", os.path.join(ROOT, "pnr", "grid", "linkpaths.tcl")],
@@ -420,14 +447,14 @@ def render(design, variant, rep, title):
                       stdout=subprocess.DEVNULL).returncode:
         return None
     lefs = list(PLATFORMS[DESIGNS[design]["platform"]]["lefs"])
-    if design == "grid":
-        lefs.append(tile_abstract(rep.get("tile_variant", "cross"))[0])
+    if is_grid(design):
+        lefs.append(tile_abstract(design, rep.get("tile_variant", "cross"))[0])
     png = os.path.join(WORK, f"{design}_{variant}.png")
     note = "\n".join(l.strip() for l in fmt(rep).splitlines()[2:] if l.strip())
     rc = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "plot_layout.py"), "--def", df,
-                         "--lef", *lefs, "--style", "grid" if design == "grid" else "tile",
+                         "--lef", *lefs, "--style", "grid" if is_grid(design) else "tile",
                          "--title", title, "--note", note, "--out", png]
-                        + (["--links", "--links-json", png[:-4] + "_links.json"] if design == "grid" else [])).returncode
+                        + (["--links", "--links-json", png[:-4] + "_links.json"] if is_grid(design) else [])).returncode
     os.remove(df)
     return png if rc == 0 else None
 
@@ -455,16 +482,19 @@ def main():
     args = ap.parse_args()
 
     extra, params = list(args.set), None
-    if args.design == "grid":
+    if is_grid(args.design):
         if args.variant == "base":
             args.variant = f"{args.order}_s{args.slice}" + ("_noft" if args.no_ft else "")
         if "--to" not in sys.argv:
             args.to = "grt"
-        lef, lib = tile_abstract(args.tile_variant)
-        tcl = os.path.join(WORK, "floorplan", f"grid_{args.variant}.tcl")
-        w, h = grid_floorplan(args.order, args.channel, args.io_band, lef, tcl)
+        lef, lib = tile_abstract(args.design, args.tile_variant)
+        tcl = os.path.join(WORK, "floorplan", f"{args.design}_{args.variant}.tcl")
+        plat = PLATFORMS[DESIGNS[args.design]["platform"]]
+        cm = plat.get("core_margin", 10.0)
+        w, h = grid_floorplan(args.order, args.channel, args.io_band, lef, tcl, plat.get("site"), cm,
+                              plat.get("fence", "EXCLUSIVE"))
         extra += [f"ADDITIONAL_LEFS={lef}", f"ADDITIONAL_LIBS={lib}", f"MACRO_PLACEMENT_TCL={tcl}",
-                  f"DIE_AREA=0 0 {w:.2f} {h:.2f}", f"CORE_AREA=10 10 {w - 10:.2f} {h - 10:.2f}"]
+                  f"DIE_AREA=0 0 {w:.2f} {h:.2f}", f"CORE_AREA={cm} {cm} {w - cm:.2f} {h - cm:.2f}"]
         params = {"LINK_SLICE": args.slice,
                   "FT_ORDER": 0 if args.no_ft else {"logical": 1, "folded": 2}[args.order]}
     else:
@@ -489,17 +519,17 @@ def main():
     if rep is None:
         print("no stage metrics found", file=sys.stderr)
         return rc or 1
-    if args.design == "grid":
+    if is_grid(args.design):
         rep.update(order=args.order, tile_variant=args.tile_variant, channel_um=args.channel, link_slice=args.slice,
                    feedthroughs=not args.no_ft)
     out = os.path.join(WORK, f"{args.design}_{args.variant}_report")
     json.dump(rep, open(out + ".json", "w"), indent=1)
     title = (f"{args.design} ({args.variant}), {DESIGNS[args.design]['platform']}, {rep['stage']}, {args.period} ns"
-             + (f", {args.order} order" if args.design == "grid" else ""))
-    if args.design == "grid":
-        rep["link_timing"] = link_timing(args.variant, args.tile_variant)
+             + (f", {args.order} order" if is_grid(args.design) else ""))
+    if is_grid(args.design):
+        rep["link_timing"] = link_timing(args.design, args.variant, args.tile_variant)
     png = render(args.design, args.variant, rep, title)
-    if args.design == "grid" and png and os.path.exists(png[:-4] + "_links.json"):
+    if is_grid(args.design) and png and os.path.exists(png[:-4] + "_links.json"):
         rep["link_length"] = json.load(open(png[:-4] + "_links.json"))
         json.dump(rep, open(out + ".json", "w"), indent=1)
     if png:

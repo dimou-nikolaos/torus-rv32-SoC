@@ -1,11 +1,12 @@
 # Worst link paths of a grid run per class of tile output (scripts/pnr.py grid):
 # X and Y links, and those through feedthroughs, with placement or global-route
-# parasitics (PARASITICS: placement | global_routing).
-read_liberty $::env(ORFS_FLOW)/platforms/sky130hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
+# parasitics (PARASITICS: placement | global_routing). STD_LIB and SETRC are
+# the platform's standard-cell liberty and wire RC (scripts/pnr.py).
+read_liberty $::env(STD_LIB)
 read_liberty $::env(TILE_LIB)
 read_db $::env(ODB)
 read_sdc $::env(SDC)
-source $::env(ORFS_FLOW)/platforms/sky130hd/setRC.tcl
+source $::env(SETRC)
 if {$::env(PARASITICS) eq "global_routing"} { read_guides $::env(GUIDES) }
 estimate_parasitics -$::env(PARASITICS)
 set f [open $::env(OUT) w]
