@@ -32,6 +32,9 @@ Device::Device(Transport& t) : t_(t) {
     nx_ = gx;
     ny_ = gy - 1;
     out_ = info >> 24;
+    spm_ = read32({0, 0}, kTctrl + kTctrlSpm);
+    if (spm_ != 32 * 1024 && spm_ != 64 * 1024)
+      throw std::runtime_error("unexpected scratchpad size " + std::to_string(spm_));
     return;
   }
   throw std::runtime_error("no I/O tile found");
@@ -135,7 +138,7 @@ Program Device::load_kernel_tree(const std::string& elf, const std::vector<Xy>& 
   bool has_head = false;
   for (auto& s : img.segments) {
     uint32_t lo = s.addr & ~15u, hi = (uint32_t)(s.addr + s.bytes.size() + 15) & ~15u;
-    if (hi > kLoaderBase) throw std::runtime_error("load_kernel_tree: segment reaches the loader at 0xE000");
+    if (hi > kLoaderBase) throw std::runtime_error("load_kernel_tree: segment reaches the loader at 0x6800");
     if (tab.nseg == 12) throw std::runtime_error("load_kernel_tree: more than 12 segments");
     tab.seg[tab.nseg][0] = lo;
     tab.seg[tab.nseg][1] = hi - lo;
@@ -149,8 +152,9 @@ Program Device::load_kernel_tree(const std::string& elf, const std::vector<Xy>& 
   Xy root = tiles[0];
   for (auto& s : img.segments) write(root, s.addr, s.bytes.data(), s.bytes.size());
   write(root, kLoaderTable, &tab, sizeof tab);
-  // Every tile boots into the loader: lui t0, 0xE; jalr x0, 0(t0); nop; nop
-  const uint32_t stub[4] = {0x0000E2B7u, 0x00028067u, 0x00000013u, 0x00000013u};
+  // Every tile boots into the loader at 0x6800: lui t0, 0x7; jalr x0, -2048(t0); nop; nop
+  static_assert(kLoaderBase == 0x7000 - 2048, "jump stub");
+  const uint32_t stub[4] = {0x000072B7u, 0x80028067u, 0x00000013u, 0x00000013u};
   for (Xy t : tiles) write(t, 0, stub, sizeof stub);
   // Run the loader: no counter clear and no settling wait after the stop
   // writes, the kernel's own launch clears the counters; every later write to

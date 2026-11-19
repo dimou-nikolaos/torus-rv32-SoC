@@ -1,5 +1,5 @@
 // Tile control registers (SPEC.md, Tile memory map): COORD, CTRL, CYCLE,
-// DOORBELL, GRID. Two register ports: the local core and the remote side (the
+// DOORBELL, GRID, SPM. Two register ports: the local core and the remote side (the
 // NIU). On a same-cycle write to the same register the remote side wins.
 module tile_ctrl
   import tile_pkg::*;
@@ -46,9 +46,11 @@ module tile_ctrl
         12'(TCTRL_CYCLE_HI): rdata[p] = hi_shadow_q[p];
         12'(TCTRL_DOORBELL): rdata[p] = {31'h0, doorbell_q};
         12'(TCTRL_GRID):     rdata[p] = {8'(IO_Y), 8'(IO_X), 8'(NY), 8'(NX)};
+        12'(TCTRL_SPM):      rdata[p] = 32'(SPM_BYTES);
         default:             err[p]   = 1'b1;
       endcase
-      if (req[p].we && req[p].addr inside {12'(TCTRL_COORD), 12'(TCTRL_CYCLE_LO), 12'(TCTRL_CYCLE_HI), 12'(TCTRL_GRID)})
+      if (req[p].we && req[p].addr inside {12'(TCTRL_COORD), 12'(TCTRL_CYCLE_LO), 12'(TCTRL_CYCLE_HI), 12'(TCTRL_GRID),
+                                    12'(TCTRL_SPM)})
         err[p] = 1'b1;   // read-only
     end
 

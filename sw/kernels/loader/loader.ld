@@ -1,22 +1,22 @@
-/* Resident loader (sw/kernels/loader): linked into 0xE000..0xEFFF, the region
+/* Resident loader (sw/kernels/loader): linked into 0x6800..0x73FF, the region
  * every program leaves alone (sw/sdk/link.ld).
- * 0x0000_E000 - 0x0000_EEFF  the resident loader: code, data, stack (sw/kernels/loader)
- * 0x0000_EF00 - 0x0000_EFFF  its image table and counters (kept across loads)
- * 0x0000_F000 - 0x0000_FEFF  semaphores and kernel sync words
- * 0x0000_FF00 - 0x0000_FFFF  mailbox (runtime args from the host)
+ * 0x0000_6800 - 0x0000_72FF  the resident loader: code, data, stack (sw/kernels/loader)
+ * 0x0000_7300 - 0x0000_73FF  its image table and counters (kept across loads)
+ * 0x0000_7400 - 0x0000_7EFF  semaphores and kernel sync words
+ * 0x0000_7F00 - 0x0000_7FFF  mailbox (runtime args from the host)
  */
 OUTPUT_ARCH("riscv")
 ENTRY(_start)
 
 MEMORY
 {
-  SPM     (rwx) : ORIGIN = 0x0000E000, LENGTH = 0x0F00
-  TABLE   (rw)  : ORIGIN = 0x0000EF00, LENGTH = 0x0100
-  SYNC    (rw)  : ORIGIN = 0x0000F000, LENGTH = 0x0F00
-  MAILBOX (rw)  : ORIGIN = 0x0000FF00, LENGTH = 0x0100
+  SPM     (rwx) : ORIGIN = 0x00006800, LENGTH = 0x0B00
+  TABLE   (rw)  : ORIGIN = 0x00007300, LENGTH = 0x0100
+  SYNC    (rw)  : ORIGIN = 0x00007400, LENGTH = 0x0B00
+  MAILBOX (rw)  : ORIGIN = 0x00007F00, LENGTH = 0x0100
 }
 
-__stack_size = 1K;
+__stack_size = 512;
 
 SECTIONS
 {

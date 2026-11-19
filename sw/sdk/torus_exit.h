@@ -13,7 +13,7 @@
  */
 #pragma once
 
-#define TORUS_EXIT_WORD   0xFFFC
+#define TORUS_EXIT_WORD   0x7FFC
 #define TORUS_EXIT_MAGIC  0xE0000000
 #define TORUS_IO_DONE     0x10004000
 

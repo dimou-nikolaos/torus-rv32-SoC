@@ -56,6 +56,9 @@ int kernel_main(const args_t *a) {
   xy_t north = neighbor(0, -1), south = neighbor(0, 1), west = neighbor(-1, 0), east = neighbor(1, 0);
   unsigned b = a->bs;
   uint32_t row_bytes = 4 * b;
+  if (!tile_buffer_ok(a->u[0], b * row_bytes) || !tile_buffer_ok(a->u[1], b * row_bytes) ||
+      !tile_buffer_ok(a->halo, 0x400) || !tile_buffer_ok(a->send, 0x100))
+    return 3;
   int32_t *sw = (int32_t *)a->send, *se = (int32_t *)(a->send + 0x80);
   volatile uint32_t *res = (volatile uint32_t *)a->result;
   uint32_t t_compute = 0;

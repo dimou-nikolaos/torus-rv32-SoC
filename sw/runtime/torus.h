@@ -10,7 +10,7 @@
 //   dev.read(t, C_ADDR, out, len);
 //   auto perf = dev.read_counters(prog.tiles);
 //
-// Addresses are local addresses at a tile (scratchpad 0x0000_0000..0xFFFF,
+// Addresses are local addresses at a tile (scratchpad 0x0000_0000 up to 32 or 64 KB,
 // registers 0x1000_xxxx), turned into global AXI addresses here.
 #pragma once
 #include <cstdint>
@@ -42,12 +42,15 @@ class Transport {
 // Global AXI address of a local address at tile t (io_pkg.sv)
 uint32_t global_addr(Xy t, uint32_t local);
 
-// Memory map constants shared with the tile SDK (sw/sdk/tile.h)
-constexpr uint32_t kMailbox = 0xFF00, kMailboxBytes = 0xF0, kExitWord = 0xFFFC;
+// Memory map constants shared with the tile SDK (sw/sdk/tile.h), the same at
+// every scratchpad size: the program region ends at kProgramEnd, sync words
+// from kSync; 64 KB scratchpads add 0x8000..0xFFFF for buffers.
+constexpr uint32_t kProgramEnd = 0x6800, kSync = 0x7400;
+constexpr uint32_t kMailbox = 0x7F00, kMailboxBytes = 0xF0, kExitWord = 0x7FFC;
 // The resident loader's region and its image table (sw/kernels/loader)
-constexpr uint32_t kLoaderBase = 0xE000, kLoaderTable = 0xEF00, kLoaderTableSent = 128;
+constexpr uint32_t kLoaderBase = 0x6800, kLoaderTable = 0x7300, kLoaderTableSent = 128;
 constexpr uint32_t kTctrl = 0x10001000, kPerf = 0x10002000, kIoRegs = 0x10004000;
-constexpr uint32_t kTctrlCoord = 0x00, kTctrlCtrl = 0x04, kTctrlGrid = 0x14;
+constexpr uint32_t kTctrlCoord = 0x00, kTctrlCtrl = 0x04, kTctrlGrid = 0x14, kTctrlSpm = 0x18;
 constexpr uint32_t kPerfSel = 0x400, kPerfSnap = 0x800, kPerfNum = 0xFF0, kPerfCmd = 0xFF4;
 constexpr uint32_t kPerfSnapshot = 1, kPerfClear = 2;
 constexpr uint32_t kIoDone = 0x000, kIoInfo = 0x100, kIoCycles = 0x104;
@@ -76,6 +79,8 @@ class Device {
   unsigned ny() const { return ny_; }
   Xy io() const { return {0, ny_}; }
   unsigned io_rd_outstanding() const { return out_; }
+  // Scratchpad bytes per compute tile (tile control SPM): 32 or 64 KB
+  uint32_t spm_bytes() const { return spm_; }
   // Compute tiles in index order n = y * NX + x (the I/O row excluded)
   std::vector<Xy> compute_grid() const;
 
@@ -124,6 +129,7 @@ class Device {
  private:
   Transport& t_;
   unsigned nx_ = 0, ny_ = 0, out_ = 0;
+  uint32_t spm_ = 0;
   Program loader_;   // installed by install_loader
 };
 

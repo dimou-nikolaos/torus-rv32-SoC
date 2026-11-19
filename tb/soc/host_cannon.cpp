@@ -27,8 +27,10 @@ using namespace torus;
 
 namespace {
 
-// Block buffers (4 KB each: b <= 32), the same on every tile, and the timings
-constexpr uint32_t kA0 = 0x8000, kA1 = 0x9000, kB0 = 0xA000, kB1 = 0xB000, kC = 0xC000, kResult = 0xF100;
+// Block buffers (4 KB each: b <= 32), the same on every tile: above the kernel
+// in the program region, or in the upper half of 64 KB scratchpads; and the
+// timings
+constexpr uint32_t kResult = kSync + 0x100;
 constexpr unsigned kMaxBlock = 32;
 const std::vector<unsigned> kModelSelects = {kEvNiuTx0, kEvNiuTx1, kEvNiuRx0, kEvNiuRx1,
                                              kEvR0Flit + kPortX, kEvR0Flit + kPortY, kEvR1Flit + kPortX,
@@ -73,6 +75,8 @@ int main(int argc, char** argv) {
     if (dev.ny() != p) throw std::runtime_error("Cannon needs a square compute grid");
     if (n % p || n / p > kMaxBlock || n == 0) throw std::runtime_error("--n must be a multiple of P, at most 32 P");
     const unsigned b = n / p;
+    const uint32_t base = dev.spm_bytes() >= 64 * 1024 ? 0x8000 : 0x1800;
+    const uint32_t kA0 = base, kA1 = base + 0x1000, kB0 = base + 0x2000, kB1 = base + 0x3000, kC = base + 0x4000;
     auto index = [&](Xy t) { return t.y * p + t.x; };
 
     // Matrices and the reference product, modulo 2^32

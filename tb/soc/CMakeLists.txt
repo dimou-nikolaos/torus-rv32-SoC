@@ -49,3 +49,22 @@ foreach(ft 1 2)
     set_target_properties(${host}_4x4_ft${ft} PROPERTIES BUILD_RPATH ${SPIKE_PREFIX}/lib)
   endforeach()
 endforeach()
+
+# The 4x4 SoC with 64 KB scratchpads (TORUS_SPM_KB, M5): the same programs,
+# with memcpy and Cannon placing their buffers in the upper 32 KB.
+set(lib soc_4x4_spm64)
+torus_verilated_lib(${lib}
+  TOP    tb_soc_top
+  SPM_KB 64
+  FLISTS rtl/soc/soc_sim.f
+  SV     tb/soc/tb_soc_top.sv
+  CPP    ${CMAKE_CURRENT_SOURCE_DIR}/sim_host.cpp
+  ARGS   -GNX=4 -GNY=4)
+target_compile_definitions(${lib} PRIVATE SOC_NX=4 SOC_NY=4)
+target_include_directories(${lib} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(${lib} PUBLIC spike_cosim torus)
+foreach(host tb_soc host_memcpy host_cannon)
+  add_executable(${host}_4x4_spm64 ${CMAKE_CURRENT_SOURCE_DIR}/${host}.cpp)
+  target_link_libraries(${host}_4x4_spm64 PRIVATE ${lib})
+  set_target_properties(${host}_4x4_spm64 PROPERTIES BUILD_RPATH ${SPIKE_PREFIX}/lib)
+endforeach()

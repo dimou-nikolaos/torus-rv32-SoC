@@ -47,12 +47,12 @@ module tb_niu_top
   // RX scratchpad writes as granted, per plane (for the ordering check)
   output logic [1:0]       rx_wr_o,
   output logic [1:0]       rx_wr_add_o,
-  output logic [1:0][15:0] rx_wr_addr_o,
+  output logic [1:0][15:0] rx_wr_addr_o,   // zero-extended
   // contention from the core ports (reads)
   input  logic        cd_req_i,
-  input  logic [15:0] cd_addr_i,
+  input  logic [SPM_AW-1:0] cd_addr_i,
   input  logic        ci_req_i,
-  input  logic [15:0] ci_addr_i,
+  input  logic [SPM_AW-1:0] ci_addr_i,
   output logic [1:0]  ev_tx_o,
   output logic [1:0]  ev_rx_o,
   output logic        ev_err_o
@@ -86,7 +86,7 @@ module tb_niu_top
     assign inj_flit_o[p]   = inj[p].flit;
     assign rx_wr_o[p]      = req[RXP].req && req[RXP].we && rsp[RXP].gnt;
     assign rx_wr_add_o[p]  = req[RXP].add;
-    assign rx_wr_addr_o[p] = req[RXP].addr;
+    assign rx_wr_addr_o[p] = 16'(req[RXP].addr);
   end
 
   niu #(.GX(GX), .GY(GY), .IO_ROW(1'b1), .DEPTH(DEPTH), .RQ_NEEDED(RQ)) u_dut (

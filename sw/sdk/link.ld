@@ -1,20 +1,24 @@
-/* Tile memory map (SPEC.md, Tile memory map and NIU registers).
- * 0x0000_0000 - 0x0000_DFFF  code, data, stack (boot at 0x0)
- * 0x0000_E000 - 0x0000_EFFF  reserved: the resident loader (sw/kernels/loader)
- * 0x0000_F000 - 0x0000_FEFF  semaphores and kernel sync words
- * 0x0000_FF00 - 0x0000_FFFF  mailbox (runtime args from the host)
+/* Tile memory map (SPEC.md, Tile memory map and NIU registers), the same at
+ * every scratchpad size (32 or 64 KB):
+ * 0x0000_0000 - 0x0000_67FF  program region: code, data, .bss, then the stack
+ *                            (boot at 0x0); free above __program_end (heap,
+ *                            buffers the host places)
+ * 0x0000_6800 - 0x0000_73FF  reserved: the resident loader (sw/kernels/loader)
+ * 0x0000_7400 - 0x0000_7EFF  semaphores and kernel sync words
+ * 0x0000_7F00 - 0x0000_7FFF  mailbox (runtime args from the host)
+ * 0x0000_8000 - 0x0000_FFFF  64 KB scratchpads only: buffers
  */
 OUTPUT_ARCH("riscv")
 ENTRY(_start)
 
 MEMORY
 {
-  SPM     (rwx) : ORIGIN = 0x00000000, LENGTH = 0xE000
-  SYNC    (rw)  : ORIGIN = 0x0000F000, LENGTH = 0x0F00
-  MAILBOX (rw)  : ORIGIN = 0x0000FF00, LENGTH = 0x0100
+  SPM     (rwx) : ORIGIN = 0x00000000, LENGTH = 0x6800
+  SYNC    (rw)  : ORIGIN = 0x00007400, LENGTH = 0x0B00
+  MAILBOX (rw)  : ORIGIN = 0x00007F00, LENGTH = 0x0100
 }
 
-__stack_size = DEFINED(__stack_size) ? __stack_size : 4K;
+__stack_size = DEFINED(__stack_size) ? __stack_size : 2K;
 
 SECTIONS
 {
@@ -41,11 +45,14 @@ SECTIONS
     __bss_end = .;
   } > SPM
 
-  /* Heap from the end of .bss up to the stack */
-  __heap_start = ALIGN(16);
-  __stack_top  = ORIGIN(SPM) + LENGTH(SPM);
-  __heap_end   = __stack_top - __stack_size;
-  ASSERT(__heap_start <= __heap_end, "program does not fit below the stack")
+  /* The stack right above .bss, so the program's footprint is [0,
+     __program_end) and buffers can start right above it; the heap takes the
+     rest of the region (host-placed buffers and malloc do not mix) */
+  __stack_top   = ALIGN(16) + __stack_size;
+  __program_end = __stack_top;
+  __heap_start  = __stack_top;
+  __heap_end    = ORIGIN(SPM) + LENGTH(SPM);
+  ASSERT(__program_end <= __heap_end, "program and stack do not fit in the program region")
 
   .sync (NOLOAD) : { *(.sync .sync.*) } > SYNC
   .mailbox (NOLOAD) : { __mailbox = .; *(.mailbox) } > MAILBOX

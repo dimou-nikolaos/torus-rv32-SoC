@@ -1,22 +1,26 @@
-torus_verilated_tb(tb_spm
-  TOP   tb_spm_top
-  FLISTS rtl/tile/spm.f
-  SV    tb/unit/spm/tb_spm_top.sv
-  CPP   ${CMAKE_CURRENT_SOURCE_DIR}/spm/tb_spm.cpp)
-
-# The same with each bank built from sky130 SRAM macros (place and route), run
-# on OpenRAM's behavioral model of the macro from the image's PDK.
+# Scratchpad banks at both sizes (TORUS_SPM_KB), behavioral and built from sky130
+# SRAM macros (place and route), the latter run on OpenRAM's behavioral model of
+# the macro from the image's PDK: one macro row per bank at 32 KB, two at 64 KB.
 set(SKY130_SRAM_V
     $ENV{PDK_ROOT}/sky130A/libs.ref/sky130_sram_macros/verilog/sky130_sram_2kbyte_1rw1r_32x512_8.v)
 if(NOT EXISTS ${SKY130_SRAM_V})
   message(FATAL_ERROR "sky130 SRAM macro model not found: ${SKY130_SRAM_V} (PDK_ROOT from the tool image)")
 endif()
-torus_verilated_tb(tb_spm_sky130
-  TOP   tb_spm_top
-  FLISTS rtl/tile/spm.f
-  SV    tb/unit/spm/tb_spm_top.sv rtl/tile/spm_bank_sky130.sv
-  CPP   ${CMAKE_CURRENT_SOURCE_DIR}/spm/tb_spm.cpp
-  ARGS  +define+SPM_SKY130 ${SKY130_SRAM_V})
+foreach(kb 32 64)
+  torus_verilated_tb(tb_spm_${kb}
+    TOP   tb_spm_top
+    SPM_KB ${kb}
+    FLISTS rtl/tile/spm.f
+    SV    tb/unit/spm/tb_spm_top.sv
+    CPP   ${CMAKE_CURRENT_SOURCE_DIR}/spm/tb_spm.cpp)
+  torus_verilated_tb(tb_spm_sky130_${kb}
+    TOP   tb_spm_top
+    SPM_KB ${kb}
+    FLISTS rtl/tile/spm.f
+    SV    tb/unit/spm/tb_spm_top.sv rtl/tile/spm_bank_sky130.sv
+    CPP   ${CMAKE_CURRENT_SOURCE_DIR}/spm/tb_spm.cpp
+    ARGS  +define+SPM_SKY130 ${SKY130_SRAM_V})
+endforeach()
 
 # Credit link: full-depth buffers at slice depths 0..2, plus one shallow buffer
 # (DEPTH = RTT - 1) that must lose exactly the predicted throughput.
@@ -92,11 +96,14 @@ foreach(cfg "2;2;0;0;1;1;0" "2;2;1;0;1;1;0" "4;4;0;0;1;1;0" "4;4;1;1;1;1;0" "4;4
                              N_PLANES=${planes} N_IO_ROW=${io})
 endforeach()
 
-torus_verilated_tb(tb_niu
-  TOP    tb_niu_top
-  FLISTS rtl/tile/niu.f
-  SV     tb/unit/niu/tb_niu_top.sv
-  CPP    ${CMAKE_CURRENT_SOURCE_DIR}/niu/tb_niu.cpp)
+foreach(kb 32 64)
+  torus_verilated_tb(tb_niu_${kb}
+    TOP    tb_niu_top
+    SPM_KB ${kb}
+    FLISTS rtl/tile/niu.f
+    SV     tb/unit/niu/tb_niu_top.sv
+    CPP    ${CMAKE_CURRENT_SOURCE_DIR}/niu/tb_niu.cpp)
+endforeach()
 
 # Async FIFO (the I/O tile's clock crossing): two depths
 foreach(depth 8 16)

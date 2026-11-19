@@ -1,10 +1,17 @@
 // Tile-level constants and types: local memory map, scratchpad geometry and the
 // 128-bit scratchpad master port shared by every bank-arbiter client.
+//
+// The scratchpad size is a build option: TORUS_SPM_KB, 32 (default) or 64. The
+// software's reserved regions sit in the low 32 KB in both (SPEC.md, Tile memory
+// map); 64 KB adds 0x8000-0xFFFF for buffers.
+`ifndef TORUS_SPM_KB
+`define TORUS_SPM_KB 32
+`endif
 package tile_pkg;
 
   // ---------------------------------------------------------------- memory map
   localparam logic [31:0] SPM_BASE      = 32'h0000_0000;
-  localparam int unsigned SPM_BYTES     = 64 * 1024;
+  localparam int unsigned SPM_BYTES     = `TORUS_SPM_KB * 1024;
   localparam logic [31:0] NIU_BASE      = 32'h1000_0000;  // 256 B, local core only
   localparam logic [31:0] TCTRL_BASE    = 32'h1000_1000;  // 256 B
   localparam logic [31:0] PERF_BASE     = 32'h1000_2000;  // 4 KB, read-only
@@ -26,6 +33,7 @@ package tile_pkg;
   localparam logic [7:0] TCTRL_CYCLE_HI = 8'h0C;  // RO, latched when CYCLE_LO is read
   localparam logic [7:0] TCTRL_DOORBELL = 8'h10;  // write 1s to clear
   localparam logic [7:0] TCTRL_GRID     = 8'h14;  // RO: compute NX [7:0], NY [15:8], I/O tile x [23:16], y [31:24]
+  localparam logic [7:0] TCTRL_SPM      = 8'h18;  // RO: scratchpad bytes
 
   // Console registers (simulation only)
   localparam logic [7:0] CONSOLE_TX     = 8'h00;  // write: one character
@@ -34,10 +42,10 @@ package tile_pkg;
   // ---------------------------------------------------------------- scratchpad
   localparam int unsigned SPM_BANKS      = 4;
   localparam int unsigned SPM_WORD_BYTES = 16;                          // 128-bit bank word
-  localparam int unsigned SPM_ROWS       = SPM_BYTES / SPM_WORD_BYTES / SPM_BANKS;  // 1024
-  localparam int unsigned SPM_AW         = $clog2(SPM_BYTES);           // 16
-  localparam int unsigned SPM_ROW_AW     = $clog2(SPM_ROWS);            // 10
-  // Byte address split: [3:0] byte in word, [5:4] bank, [15:6] row
+  localparam int unsigned SPM_ROWS       = SPM_BYTES / SPM_WORD_BYTES / SPM_BANKS;  // 512 at 32 KB
+  localparam int unsigned SPM_AW         = $clog2(SPM_BYTES);           // 15 at 32 KB
+  localparam int unsigned SPM_ROW_AW     = $clog2(SPM_ROWS);            // 9 at 32 KB
+  // Byte address split: [3:0] byte in word, [5:4] bank, [SPM_AW-1:6] row
   localparam int unsigned SPM_BANK_LSB   = $clog2(SPM_WORD_BYTES);      // 4
   localparam int unsigned SPM_ROW_LSB    = SPM_BANK_LSB + $clog2(SPM_BANKS);  // 6
 

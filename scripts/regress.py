@@ -46,18 +46,26 @@ def discover(args):
     # The tile with SRAM macro banks (place and route), on OpenRAM's macro model
     sram_v = os.path.join(os.environ.get("PDK_ROOT", "/opt/torus/pdk"), "sky130A", "libs.ref",
                           "sky130_sram_macros", "verilog", "sky130_sram_2kbyte_1rw1r_32x512_8.v")
-    tests.append(Test("lint.tile_sky130", lint + ["--top-module", "tile_top", "+define+SPM_SKY130",
-                                                  "-f", "rtl/tile/tile_sim.f", "rtl/tile/spm_bank_sky130.sv",
-                                                  sram_v], seeded=False))
+    for kb in (32, 64):   # scratchpad sizes (TORUS_SPM_KB)
+        tests.append(Test(f"lint.tile_sky130_{kb}k", lint + [
+            "--top-module", "tile_top", "+define+SPM_SKY130", f"+define+TORUS_SPM_KB={kb}",
+            "-f", "rtl/tile/tile_sim.f", "rtl/tile/spm_bank_sky130.sv", sram_v], seeded=False))
+    # Only 32 and 64 KB keep the software's memory map
+    tests.append(Test("lint.tile_spm16_rejected", lint + ["--top-module", "tile_top", "+define+TORUS_SPM_KB=16",
+                                                          "-f", "rtl/tile/tile_sim.f"],
+                      seeded=False, expect_fail=True))
     for i in range(args.spm_seeds):
-        tests.append(Test(f"unit.spm.{i}", [str(BUILD / "tb/unit/tb_spm"), "--cycles=200000"]))
-    for i in range(2):   # banks built from sky130 SRAM macros (OpenRAM model)
-        tests.append(Test(f"unit.spm_sky130.{i}", [str(BUILD / "tb/unit/tb_spm_sky130"), "--cycles=200000"]))
+        tests.append(Test(f"unit.spm.{i}", [str(BUILD / "tb/unit/tb_spm_32"), "--cycles=200000"]))
+    tests.append(Test("unit.spm_64k", [str(BUILD / "tb/unit/tb_spm_64"), "--cycles=200000"]))
+    for kb in (32, 64):   # banks built from sky130 SRAM macros (OpenRAM model): one macro row, two
+        tests.append(Test(f"unit.spm_sky130_{kb}k", [str(BUILD / f"tb/unit/tb_spm_sky130_{kb}"),
+                                                     "--cycles=200000"]))
     tests.append(Test("unit.flit", [str(BUILD / "tb/unit/tb_flit")]))
     for cfg in ("s0_d4", "s1_d6", "s2_d8", "s0_d3", "s2_d7"):
         tests.append(Test(f"unit.link.{cfg}", [str(BUILD / f"tb/unit/tb_link_{cfg}")]))
     for i in range(3):
-        tests.append(Test(f"unit.niu.{i}", [str(BUILD / "tb/unit/tb_niu")]))
+        tests.append(Test(f"unit.niu.{i}", [str(BUILD / "tb/unit/tb_niu_32")]))
+    tests.append(Test("unit.niu_64k", [str(BUILD / "tb/unit/tb_niu_64")]))
     for depth in (8, 16):
         tests.append(Test(f"unit.cdc.d{depth}", [str(BUILD / f"tb/unit/tb_cdc_d{depth}"), "--quiet"]))
     for r in range(6):   # AXI : fabric clock ratios
@@ -156,6 +164,18 @@ def discover(args):
         "--elf", str(BUILD / "sw/memcpy.elf"), "--shift=1,1", "--load=tree"], timeout=1200))
     tests.append(Test("soc2x2.cannon_tree_load", [str(BUILD / "tb/soc/host_cannon_2x2"), str(BUILD / "sw/cannon.elf"),
                                                   "--n=32", "--load=tree"], timeout=1200))
+    # M5: 32 KB scratchpads (the default) still hold Cannon's largest block
+    # (b = 32: five 4 KB buffers above the kernel); 64 KB scratchpads run the
+    # same programs with memcpy and Cannon buffers in the upper 32 KB
+    tests.append(Test("tile.cannon_b32", [str(BUILD / "tb/soc/host_cannon_1x1"), str(BUILD / "sw/cannon.elf"),
+                                          "--n=32"]))
+    tests.append(Test("soc4x4_spm64.dmatest", [str(BUILD / "tb/soc/tb_soc_4x4_spm64"), str(BUILD / "sw/dmatest.elf")],
+                      timeout=1200))
+    tests.append(Test("soc4x4_spm64.memcpy_s1_1_16k", [
+        sys.executable, "model/perf_model.py", "run-memcpy", "--host", str(BUILD / "tb/soc/host_memcpy_4x4_spm64"),
+        "--elf", str(BUILD / "sw/memcpy.elf"), "--shift=1,1", "--len=16384"], timeout=1200))
+    tests.append(Test("soc4x4_spm64.cannon_n64", cannon + ["--host", str(BUILD / "tb/soc/host_cannon_4x4_spm64"),
+                                                           "--n", "64"], timeout=1200))
     if args.long:
         # M4 exit: the kernel suite at 8x8 (multithreaded model)
         for shift in ("1,1", "2,2"):

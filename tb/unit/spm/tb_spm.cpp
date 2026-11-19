@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
   SpmMemory mem;
   Req port[kSpmPorts];
   uint32_t stream_addr[kSpmPorts];
-  for (int p = 0; p < kSpmPorts; p++) stream_addr[p] = (uint32_t)(rng() & 0xfff0);
+  for (int p = 0; p < kSpmPorts; p++) stream_addr[p] = (uint32_t)(rng() & (kSpmBytes - 16));
 
   // Expected read data for the cycle after a grant
   bool exp_valid[kSpmPorts] = {};
@@ -118,12 +118,12 @@ int main(int argc, char** argv) {
     // RX ports occasionally issue an atomic: locked read, then write
     r.lock = (p == 1 || p == 2) && !r.we && (rng() % 4 == 0);
     switch (mode) {
-      case Mode::Uniform: r.addr = (uint32_t)(rng() & 0xffff); break;
+      case Mode::Uniform: r.addr = (uint32_t)(rng() & (kSpmBytes - 1)); break;
       case Mode::HotBank:
-        r.addr = (uint32_t)((rng() & 0xffc0) | (hot_bank << 4) | (rng() & 0xf));
+        r.addr = (uint32_t)((rng() & (kSpmBytes - 64)) | (hot_bank << 4) | (rng() & 0xf));
         break;
       case Mode::Stream:
-        stream_addr[p] = (stream_addr[p] + 16) & 0xffff;
+        stream_addr[p] = (stream_addr[p] + 16) & (kSpmBytes - 1);
         r.addr = stream_addr[p];
         break;
     }
@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
       if (r.we) we |= 1u << p;
       if (r.lock) lock |= 1u << p;
       if (r.add) add |= 1u << p;
-      set_bits(dut->addr_i.data(), p * 16, 16, r.addr);
+      set_bits(dut->addr_i.data(), p * kSpmAw, kSpmAw, r.addr);
       set_bits(dut->be_i.data(), p * 16, 16, r.be);
       for (int b = 0; b < 16; b++) set_bits(dut->wdata_i.data(), p * 128 + b * 8, 8, r.data[b]);
     }

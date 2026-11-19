@@ -47,6 +47,11 @@ module tile_top
   input  logic        yft_credit_i   [2],
   output logic        yft_credit_o   [2]
 );
+  // The software's memory map needs the low 32 KB; the window offset is 16 bits
+  if (SPM_BYTES != 32 * 1024 && SPM_BYTES != 64 * 1024) begin : g_bad_spm
+    $fatal(1, "tile_top: TORUS_SPM_KB must be 32 or 64 (scratchpad %0d bytes)", SPM_BYTES);
+  end
+
   assign xft_o        = xft_i;
   assign xft_credit_o = xft_credit_i;
   assign yft_o        = yft_i;
@@ -66,7 +71,7 @@ module tile_top
   // CTRL.run low holds the core in reset (SPEC.md, launch protocol)
   assign core_rst_n = rst_ni && run;
 
-  core_wrap u_core (
+  core_wrap #(.SPM_BYTES(32'(SPM_BYTES))) u_core (
     .clk_i, .rst_ni(core_rst_n), .fetch_enable_i(1'b1),
     .hartid_i       ({24'h0, coord_y_i, coord_x_i}),
     .instr_req_o    (instr_req),   .instr_gnt_i   (instr_gnt),   .instr_rvalid_i(instr_rvalid),

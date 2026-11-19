@@ -10,7 +10,12 @@ namespace torus {
 
 constexpr int kSpmPorts = 7;
 constexpr int kSpmBanks = 4;
-constexpr int kSpmBytes = 64 * 1024;
+#ifndef TORUS_SPM_KB
+#define TORUS_SPM_KB 32
+#endif
+constexpr int kSpmBytes = TORUS_SPM_KB * 1024;   // the build's scratchpad (tile_pkg.sv)
+constexpr int kSpmAw = TORUS_SPM_KB == 64 ? 16 : 15;   // byte address bits (SPM_AW)
+static_assert(TORUS_SPM_KB == 32 || TORUS_SPM_KB == 64, "scratchpad size");
 // Ports: engine, RX0, RX1, TX-DMA, TX-reply, core data, core instruction.
 // Default order: engine, TX (round-robin), RX (round-robin), core data, core instruction.
 constexpr int kRx0 = 1, kRx1 = 2, kTxDma = 3, kTxRep = 4;

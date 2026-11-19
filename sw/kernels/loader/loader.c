@@ -1,10 +1,10 @@
 // Resident loader (SPEC.md, M4: kernel load by a software tree). Installed
-// once at 0xE000 on every tile (Device::install_loader), it distributes a
+// once at 0x6800 on every tile (Device::install_loader), it distributes a
 // program image over the compute grid in a binomial tree instead of the host
 // writing every tile through the I/O tile.
 //
 // For a load (Device::load_kernel_tree), the host writes the image and the
-// table below only to tile 0, a 16-byte jump to 0xE000 at address 0 of every
+// table below only to tile 0, a 16-byte jump to 0x6800 at address 0 of every
 // tile, and launches this program everywhere. Tile n > 0 waits for its image
 // from its parent n - 2^floor(log2 n); every tile then sends the image and the
 // table to its children n + 2^k (largest subtree first), restores the image's

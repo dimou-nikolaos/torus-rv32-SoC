@@ -93,5 +93,10 @@ TORUS_IMAGE=torus-tools:local tools/dev.sh scripts/regress.py --no-build --seed 
 - ORFS's slang read uses --keep-hierarchy, which rejects core_wrap's
   hierarchical event taps: pnr/common/canonicalize.tcl reads the sources
   instead (core_wrap elaborated flat on its own).
+- Scratchpad size is a build define (TORUS_SPM_KB, 32 default, 64 option) and
+  changes SPM_AW (15 or 16): testbenches pack scratchpad addresses at that
+  width (tb/models/spm_model.h kSpmAw), not at 16 bits.
+- crt0 loads the mailbox address without relaxation: the loader's gp lands
+  near the mailbox and ld relaxes `la` to a gp offset it cannot encode.
 - Revert a mutation with the inverse edit, never `git checkout <file>`: it
   also throws away the uncommitted work in that file.

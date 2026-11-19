@@ -79,6 +79,10 @@ tools/dev.sh build/tb/soc/tb_soc_1x1 build/sw/hello.elf
 tools/dev.sh build/tb/soc/tb_soc_1x1 build/sw/isa/rv32ui-add.elf --rvfi-trace
 tools/dev.sh build/tb/soc/tb_soc_4x4 build/sw/hello.elf --axi-half=10   # slower AXI clock
 
+# Scratchpad size: 32 KB per tile by default; -DTORUS_SPM_KB=64 builds every
+# model with 64 KB (the regression also builds the 4x4 SoC at 64 KB:
+# tb_soc_4x4_spm64, host_memcpy_4x4_spm64, host_cannon_4x4_spm64)
+
 # Waveforms: compiled in only on request (a separate build directory keeps the
 # fast models), then --trace=FILE writes an FST
 tools/dev.sh cmake -S . -B build-trace -G Ninja -DCMAKE_BUILD_TYPE=Release -DTORUS_TRACE=ON
@@ -112,7 +116,7 @@ tools/dev.sh build/tb/soc/host_cannon_8x8 build/sw/cannon.elf --n=128 --load=tre
 tools/dev.sh scripts/regress.py --seed 1234
 tools/dev.sh scripts/regress.py --long --no-build     # adds the 8x8 kernel suite, Cannon N=128, planes
 tools/dev.sh scripts/regress.py -k isa --no-build
-tools/dev.sh build/tb/unit/tb_spm --seed=42
+tools/dev.sh build/tb/unit/tb_spm_32 --seed=42
 
 # Area report (Yosys generic cells, SRAM as macros)
 tools/dev.sh scripts/regress.py -k synth --synth --no-build
@@ -149,9 +153,14 @@ Waveforms are FST files; open them on the host with Surfer or GTKWave.
 ## Notes for kernel writers
 
 - A program ends by returning from `kernel_main` (or calling `exit`): the exit
-  sequence writes the exit word at `0xFFFC` and increments DONE in the I/O
+  sequence writes the exit word at `0x7FFC` and increments DONE in the I/O
   tile, which is what the host waits for. Args from the host are in the
-  mailbox at `0xFF00` (`kernel_main`'s argument).
+  mailbox at `0x7F00` (`kernel_main`'s argument).
+- The program region is `0x0000`–`0x67FF` at both scratchpad sizes: code,
+  data, `.bss`, then the stack (2 KB, `__stack_size` in sw/sdk/link.ld), so the
+  program occupies `[0, tile_program_end())`. Buffers the host places go above
+  it, or at `0x8000` and up on 64 KB scratchpads (`tile_spm_bytes()`); check
+  them with `tile_buffer_ok`. Sync words live at `0x7400`–`0x7EFF`.
 - `io_xy()`, `grid_nx()`, `grid_ny()` come from the tile's `GRID` register; the
   I/O row (`y = NY`) is not a compute row.
 

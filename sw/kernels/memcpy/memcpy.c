@@ -27,6 +27,7 @@ struct args {
 int kernel_main(const args_t *a) {
   xy_t partner = {(uint8_t)(a->partner & 0xff), (uint8_t)(a->partner >> 8)};
   volatile uint32_t *res = (volatile uint32_t *)a->result;
+  if (!tile_buffer_ok(a->src, a->len)) return 3;   // the destination is the partner's
   noc_set_plane(a->plane);
   if (a->go)
     while (*(volatile uint32_t *)a->go == 0) {

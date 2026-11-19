@@ -473,13 +473,13 @@ def planes(args, rest):
             r = {}
             for plane in ("noc0", "auto"):
                 rep = run_memcpy(os.path.join(b, "tb/soc/host_memcpy_4x4"), os.path.join(b, "sw/memcpy.elf"), shift,
-                                 16384, plane, rest, d)
+                                 8192, plane, rest, d)
                 if rep is None:
                     return 1
                 tr, _, _ = predict_memcpy(rep)
                 hops = sum(tr.links.values())
                 r[plane] = (rep["copy_cycles"], hops)
-            rows.append((f"memcpy 16 KB, shift ({shift})", "copy phase", r))
+            rows.append((f"memcpy 8 KB, shift ({shift})", "copy phase", r))
         for n in args.cannon:
             r = {}
             for plane in ("noc0", "auto"):
@@ -513,7 +513,7 @@ def main():
     b.add_argument("--host", required=True)
     b.add_argument("--elf", required=True)
     b.add_argument("--shift", default="1,1")
-    b.add_argument("--len", default="16384")
+    b.add_argument("--len", default="8192")
     b.add_argument("--plane", default="auto", choices=FORCED)
     b.add_argument("--tolerance", type=float, default=0.05)
     b.add_argument("--report-dir", default=REPORTS, help="where the report is kept")

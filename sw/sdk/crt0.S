@@ -23,7 +23,12 @@ _start:
   addi  t0, t0, 4
   j     1b
 2:
+  # Not gp-relative: the loader's gp lands near the mailbox, and ld relaxes
+  # this to an offset it then cannot encode
+  .option push
+  .option norelax
   la    a0, __mailbox
+  .option pop
   call  kernel_main
   call  exit
 3:

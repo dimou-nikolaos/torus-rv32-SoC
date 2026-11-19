@@ -50,6 +50,7 @@ int kernel_main(const args_t *a) {
   unsigned pos[2] = {me.x, me.y}, size[2] = {grid_nx(), grid_ny()};
   uint32_t *v = (uint32_t *)a->vec;
   unsigned n = a->len / 4;
+  if (!tile_buffer_ok(a->vec, a->len) || !tile_buffer_ok(a->recv, 8 * a->stride)) return 3;
   uint32_t t_add = 0;
   volatile uint32_t *res = (volatile uint32_t *)a->result;
   res[0] = now();

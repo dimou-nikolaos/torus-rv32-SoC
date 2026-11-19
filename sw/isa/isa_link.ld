@@ -9,5 +9,5 @@ SECTIONS
   . = ALIGN(0x100);
   .data : { *(.data) }
   .bss : { *(.bss) }
-  ASSERT(. <= 0xF000, "ISA test does not fit")
+  ASSERT(. <= 0x6800, "ISA test does not fit in the program region")
 }

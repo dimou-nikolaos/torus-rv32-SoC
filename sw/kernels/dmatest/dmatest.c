@@ -1,5 +1,5 @@
 // NIU DMA test on one tile (works on any grid): loopback writes into the tile's
-// own scratchpad through the router, both channels at once, a 16 KB transfer, and
+// own scratchpad through the router, both channels at once, a 4 KB transfer, and
 // the error cases of the command checks.
 #include <stdio.h>
 #include <string.h>
@@ -14,7 +14,7 @@
     }                                               \
   } while (0)
 
-#define BIG 16384u
+#define BIG 4096u
 static uint8_t src_a[BIG] __attribute__((aligned(16)));
 static uint8_t dst_a[BIG] __attribute__((aligned(16)));
 static uint8_t src_b[1024] __attribute__((aligned(16)));
@@ -47,7 +47,7 @@ int kernel_main(const args_t *args) {
   CHECK(memcmp(dst_b, src_b, 1024) == 0);
   CHECK(!(niu_status(1) & NIU_STATUS_ERROR));
 
-  // 2. Both channels at once: 16 KB on channel 0, 1 KB on channel 1
+  // 2. Both channels at once: 4 KB on channel 0, 1 KB on channel 1
   fill(src_a, BIG, 2);
   fill(src_b, 1024, 3);
   memset(dst_a, 0, BIG);
@@ -63,20 +63,21 @@ int kernel_main(const args_t *args) {
   CHECK(memcmp(dst_a, src_a, BIG) == 0);
   CHECK(memcmp(dst_b, src_b, 1024) == 0);
   CHECK(NIU_STATUS_DONE(niu_status(0)) == ((done0 + 1) & 0xffff));
-  printf("16 KB loopback injected in %lu cycles (%lu flits)\n", (unsigned long)(t1 - t0),
+  printf("4 KB loopback injected in %lu cycles (%lu flits)\n", (unsigned long)(t1 - t0),
          (unsigned long)(BIG / 16));
 
   // 3. Command errors: each completes at once with the error bit, never hangs
+  uint32_t last = tile_spm_bytes() - 16;   // the scratchpad's last word
   struct { uint32_t src, dst_addr, xy, len, cmd; } bad[] = {
     {(uint32_t)src_b + 4, (uint32_t)dst_b, 0, 16, NIU_OP_WRITE},       // misaligned source
     {(uint32_t)src_b, (uint32_t)dst_b + 8, 0, 16, NIU_OP_WRITE},       // misaligned destination
     {(uint32_t)src_b, (uint32_t)dst_b, 0, 20, NIU_OP_WRITE},           // length not a multiple of 16
-    {0xFFF0u, (uint32_t)dst_b, 0, 32, NIU_OP_WRITE},                   // source past the scratchpad
+    {last, (uint32_t)dst_b, 0, 32, NIU_OP_WRITE},                      // source past the scratchpad
     {(uint32_t)src_b, (uint32_t)dst_b, 0x0F0F, 16, NIU_OP_WRITE},      // outside the grid
     {(uint32_t)src_b, (uint32_t)dst_b, 0x10000, 16, NIU_OP_WRITE},     // upper bits set
     {(uint32_t)src_b, (uint32_t)dst_b, 0, 16, 3},                      // MULTICAST: not before M4
     {(uint32_t)src_b, (uint32_t)dst_b, 0, 16, 7},                      // reserved op
-    {0xFFF0u, (uint32_t)dst_b, 0, 32, NIU_OP_READ_REQ},                // read landing past the scratchpad
+    {last, (uint32_t)dst_b, 0, 32, NIU_OP_READ_REQ},                   // read landing past the scratchpad
     {(uint32_t)src_b, (uint32_t)dst_b + 2, 0, 16, NIU_OP_ATOMIC_INC},  // atomic not word-aligned
     {(uint32_t)src_b, (uint32_t)dst_b, 0, 16, NIU_OP_WRITE | NIU_CMD_PLANE(3)}, // reserved plane
   };

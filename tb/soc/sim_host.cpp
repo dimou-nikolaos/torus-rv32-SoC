@@ -13,6 +13,7 @@
 #include "Vtb_soc_top__Dpi.h"
 #include "axi_bfm.h"
 #include "spike_cosim.h"
+#include "spm_model.h"
 
 #ifndef SOC_NX
 #define SOC_NX 1
@@ -25,7 +26,6 @@ namespace torus {
 
 namespace {
 constexpr int kNX = SOC_NX, kNY = SOC_NY, kN = kNX * kNY;
-constexpr uint32_t kSpmBytes = 64 * 1024;
 }  // namespace
 
 struct SimHost::Impl {

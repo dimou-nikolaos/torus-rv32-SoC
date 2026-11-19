@@ -22,8 +22,9 @@ using namespace torus;
 
 namespace {
 
-// The vector, the receive buffers (up to 8 levels of 2 KB, below the loader at 0xE000), timings
-constexpr uint32_t kVec = 0x8000, kRecv = 0x9000, kResult = 0xF100;
+// The vector, the receive buffers (up to 8 levels of 2 KB, up to the end of the
+// program region), timings
+constexpr uint32_t kVec = 0x2000, kRecv = 0x2800, kResult = kSync + 0x100;
 constexpr uint32_t kMaxLen = 2048;
 const std::vector<unsigned> kModelSelects = {kEvNiuTx0, kEvNiuTx1, kEvNiuRx0, kEvNiuRx1,
                                              kEvR0Flit + kPortX, kEvR0Flit + kPortY, kEvR1Flit + kPortX,

@@ -24,7 +24,7 @@ using namespace torus;
 namespace {
 
 // Block buffers (4 KB each), halos, packed columns, timings: the same on every tile
-constexpr uint32_t kU0 = 0x8000, kU1 = 0x9000, kHalo = 0xA000, kSend = 0xA400, kResult = 0xF100;
+constexpr uint32_t kU0 = 0x2000, kU1 = 0x3000, kHalo = 0x4000, kSend = 0x4400, kResult = kSync + 0x100;
 constexpr unsigned kMaxBlock = 32;
 const std::vector<unsigned> kModelSelects = {kEvNiuTx0, kEvNiuTx1, kEvNiuRx0, kEvNiuRx1,
                                              kEvR0Flit + kPortX, kEvR0Flit + kPortY, kEvR1Flit + kPortX,

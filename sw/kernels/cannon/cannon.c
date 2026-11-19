@@ -85,6 +85,9 @@ int kernel_main(const args_t *a) {
   noc_set_plane(a->plane);
   xy_t west = neighbor(-1, 0), east = neighbor(1, 0), north = neighbor(0, -1), south = neighbor(0, 1);
   uint32_t bytes = a->bs * a->bs * 4;
+  for (int i = 0; i < 2; i++)
+    if (!tile_buffer_ok(a->a[i], bytes) || !tile_buffer_ok(a->b[i], bytes)) return 3;
+  if (!tile_buffer_ok(a->c, bytes)) return 3;
   volatile uint32_t *res = (volatile uint32_t *)a->result;
 
   for (unsigned k = 0; k < p; k++) {

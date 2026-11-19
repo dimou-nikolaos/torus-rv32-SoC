@@ -40,6 +40,7 @@
 #include "noc_flit.h"
 #include "noc_tlm.h"
 #include "router_model.h"
+#include "spm_model.h"
 #include "tb_args.h"
 #include "tb_trace.h"
 
@@ -51,8 +52,8 @@ constexpr int kGX = 4, kGY = 4, kDepth = 5, kRQ = 6;  // row kGY-1 is the I/O ro
 constexpr int kMeX = 1, kMeY = 2;
 // Region A: DMA and reply sources, never written. B1: RX writes and reply
 // sources. B2: RX writes and the landing area of our own reads. Plane p writes
-// only the p-th half of B1 and of B2 (8 KB each).
-constexpr uint32_t kSpm = 64 * 1024, kRegionB = 0x8000, kRegionB2 = 0xC000, kHalf = 0x2000;
+// only the p-th half of B1 and of B2 (each an eighth of the scratchpad).
+constexpr uint32_t kSpm = kSpmBytes, kRegionB = kSpm / 2, kRegionB2 = kSpm / 4 * 3, kHalf = kSpm / 8;
 constexpr uint32_t kTctrl = 0x10001000, kPerf = 0x10002000;
 uint32_t b1(int p) { return kRegionB + kHalf * (uint32_t)p; }
 uint32_t b2(int p) { return kRegionB2 + kHalf * (uint32_t)p; }
@@ -449,9 +450,9 @@ int main(int argc, char** argv) {
     dut->rmt_rdata_i = rmt_rd_pending && !reg_err(rmt_rd_addr) ? reg_val(rmt_rd_addr) : 0;
     dut->rmt_err_i = rmt_rd_pending && reg_err(rmt_rd_addr);
     dut->cd_req_i = (int)(rng() % 100) < contention_pct;
-    dut->cd_addr_i = (uint16_t)rng();
+    dut->cd_addr_i = (uint16_t)(rng() & (kSpm - 1));
     dut->ci_req_i = (int)(rng() % 100) < contention_pct;
-    dut->ci_addr_i = (uint16_t)rng();
+    dut->ci_addr_i = (uint16_t)(rng() & (kSpm - 1));
     half(0);
 
     // ---- observe this cycle (combinational outputs)

@@ -10,6 +10,8 @@
 //               [SimHost options: --seed, --cycles, --trace, --no-cosim, ...]
 // --plane forces the copies and their semaphores onto one plane (a one-plane
 // NoC for comparisons).
+// The blocks sit in the program region above the kernel (up to 8 KB), or in the
+// upper half of 64 KB scratchpads (up to 16 KB).
 // --events selects other counter events (tile_pkg.sv perf_event_e) than the
 // ones the model checks, for investigations; they are printed per tile.
 #include <algorithm>
@@ -29,7 +31,7 @@ using namespace torus;
 
 namespace {
 
-constexpr uint32_t kSrc = 0x4000, kDst = 0x8000, kSem = 0xF000, kGo = 0xF004, kResult = 0xF010;
+constexpr uint32_t kSem = kSync, kGo = kSync + 4, kResult = kSync + 0x10;
 // Counters 2..9 count these (the model maps them by event number)
 const std::vector<unsigned> kModelSelects = {kEvNiuTx0, kEvNiuTx1, kEvNiuRx0, kEvNiuRx1,
                                         kEvR0Flit + kPortX, kEvR0Flit + kPortY, kEvR1Flit + kPortX,
@@ -47,13 +49,9 @@ int main(int argc, char** argv) {
     fprintf(stderr, "usage: host_memcpy <memcpy.elf> [--len=N] [--shift=DX,DY] [--report=FILE]\n");
     return 2;
   }
-  uint32_t len = (uint32_t)std::stoul(args.opt("len", "16384"));
+  uint32_t len = (uint32_t)std::stoul(args.opt("len", "8192"));
   std::string shift = args.opt("shift", "1,1");
   int sx = std::stoi(shift.substr(0, shift.find(','))), sy = std::stoi(shift.substr(shift.find(',') + 1));
-  if (len % 16 || len == 0 || len > kDst - kSrc) {
-    fprintf(stderr, "--len must be a multiple of 16 up to %u\n", kDst - kSrc);
-    return 2;
-  }
   const std::string plane_name = args.opt("plane", "auto");
   const uint32_t plane = plane_name == "noc0" ? 1 : plane_name == "noc1" ? 2 : 0;
   if (plane == 0 && plane_name != "auto") {
@@ -65,6 +63,10 @@ int main(int argc, char** argv) {
   int status = 0;
   try {
     Device dev(sim);
+    const bool big = dev.spm_bytes() >= 64 * 1024;
+    const uint32_t kSrc = big ? 0x8000 : 0x2000, kDst = big ? 0xC000 : 0x4000;
+    if (len % 16 || len == 0 || len > kDst - kSrc)
+      throw std::runtime_error("--len must be a multiple of 16 up to " + std::to_string(kDst - kSrc));
     auto grid = dev.compute_grid();
     const unsigned nx = dev.nx(), ny = dev.ny(), n = (unsigned)grid.size();
     auto index = [&](Xy t) { return t.y * nx + t.x; };

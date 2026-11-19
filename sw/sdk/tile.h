@@ -8,10 +8,15 @@ extern "C" {
 #endif
 
 // ------------------------------------------------------------- memory map
+// The same at every scratchpad size (32 or 64 KB; tile_spm_bytes()): the
+// program region, then the loader, sync words and the mailbox in the low 32 KB;
+// 64 KB adds 0x8000..0xFFFF for buffers.
 #define TILE_SPM_BASE      0x00000000u
-#define TILE_SYNC_BASE     0x0000F000u
-#define TILE_MAILBOX_BASE  0x0000FF00u   // args from the host: 0xFF00..0xFFEF
-#define TILE_EXIT_WORD     0x0000FFFCu   // 0xE000_0000 | exit code, written at exit
+#define TILE_PROGRAM_END   0x00006800u   // end of the program region (code, data, stack, heap)
+#define TILE_LOADER_BASE   0x00006800u   // the resident loader (sw/kernels/loader)
+#define TILE_SYNC_BASE     0x00007400u
+#define TILE_MAILBOX_BASE  0x00007F00u   // args from the host: 0x7F00..0x7FEF
+#define TILE_EXIT_WORD     0x00007FFCu   // 0xE000_0000 | exit code, written at exit
 #define IO_SEM(k)          (0x10004000u + 4u * (unsigned)(k))   // host semaphores in the I/O tile
 #define IO_DONE            IO_SEM(0)
 #define TILE_NIU_BASE      0x10000000u
@@ -25,6 +30,7 @@ extern "C" {
 #define TCTRL_CYCLE_HI  0x0C
 #define TCTRL_DOORBELL  0x10
 #define TCTRL_GRID      0x14   // compute NX [7:0], NY [15:8], I/O tile x [23:16], y [31:24]
+#define TCTRL_SPM       0x18   // scratchpad bytes
 
 #define CONSOLE_TX      0x00
 #define CONSOLE_EXIT    0x04
@@ -101,6 +107,22 @@ static inline xy_t io_xy(void) {
   uint32_t g = tile_grid();
   xy_t r = {(uint8_t)((g >> 16) & 0xff), (uint8_t)(g >> 24)};
   return r;
+}
+
+static inline uint32_t tile_spm_bytes(void) { return mmio_read(TILE_TCTRL_BASE + TCTRL_SPM); }
+
+// The program's footprint is [0, tile_program_end()): code, data, .bss and the
+// stack (sw/sdk/link.ld). Buffers the host places must start at or above it.
+extern char __program_end[];
+static inline uint32_t tile_program_end(void) { return (uint32_t)__program_end; }
+
+// A buffer of len bytes at addr lies in free scratchpad: in the program region
+// above the program, or in the upper 32 KB of a 64 KB scratchpad.
+static inline int tile_buffer_ok(uint32_t addr, uint32_t len) {
+  uint32_t end = addr + len;
+  if (end < addr) return 0;
+  if (addr >= tile_program_end() && end <= TILE_PROGRAM_END) return 1;
+  return addr >= 0x8000u && end <= tile_spm_bytes();
 }
 
 // Compute tile index n = y * NX + x, and back

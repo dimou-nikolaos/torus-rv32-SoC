@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "sim_host.h"
+#include "spm_model.h"
 #include "tb_args.h"
 #include "torus.h"
 
@@ -78,6 +79,8 @@ int main(int argc, char** argv) {
       uint32_t g = dev.read32(t, kTctrl + kTctrlGrid);
       CHECK(coord == (t.y << 8 | t.x) && ctrl == 0 && g == ((uint32_t)ny << 24 | (uint32_t)ny << 8 | (uint32_t)nx),
             "tile (%u,%u): COORD %08x CTRL %08x GRID %08x", t.x, t.y, coord, ctrl, g);
+      uint32_t spm = dev.read32(t, kTctrl + kTctrlSpm);
+      CHECK(spm == (uint32_t)kSpmBytes, "tile (%u,%u): SPM %u bytes, built with %d", t.x, t.y, spm, kSpmBytes);
     }
     CHECK(throws([&] { dev.read32(grid[0], 0x10000000); }), "NIU registers answered a remote read");
     CHECK(throws([&] { dev.read32(grid[0], 0x10003000); }), "the console answered a remote read");
